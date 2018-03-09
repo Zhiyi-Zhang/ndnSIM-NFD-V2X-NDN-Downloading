@@ -407,6 +407,7 @@ Forwarder::onOutgoingData(const Data& data, Face& outFace)
 void
 Forwarder::onIncomingNack(Face& inFace, const lp::Nack& nack)
 {
+  return;
   // receive Nack
   nack.setTag(make_shared<lp::IncomingFaceIdTag>(inFace.getId()));
   ++m_counters.nInNacks;
@@ -464,6 +465,7 @@ void
 Forwarder::onOutgoingNack(const shared_ptr<pit::Entry>& pitEntry, const Face& outFace,
                           const lp::NackHeader& nack)
 {
+  return;
   if (outFace.getId() == face::INVALID_FACEID) {
     NFD_LOG_WARN("onOutgoingNack face=invalid" <<
                   " nack=" << pitEntry->getInterest().getName() <<

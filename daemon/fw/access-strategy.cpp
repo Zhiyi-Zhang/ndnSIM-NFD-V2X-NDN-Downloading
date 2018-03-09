@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -31,30 +31,44 @@ namespace nfd {
 namespace fw {
 
 NFD_LOG_INIT("AccessStrategy");
-
-const Name AccessStrategy::STRATEGY_NAME("ndn:/localhost/nfd/strategy/access/%FD%01");
 NFD_REGISTER_STRATEGY(AccessStrategy);
 
 AccessStrategy::AccessStrategy(Forwarder& forwarder, const Name& name)
-  : Strategy(forwarder, name)
+  : Strategy(forwarder)
   , m_removeFaceInfoConn(this->beforeRemoveFace.connect(
                          bind(&AccessStrategy::removeFaceInfo, this, _1)))
 {
+  ParsedInstanceName parsed = parseInstanceName(name);
+  if (!parsed.parameters.empty()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument("AccessStrategy does not accept parameters"));
+  }
+  if (parsed.version && *parsed.version != getStrategyName()[-1].toVersion()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument(
+      "AccessStrategy does not support version " + to_string(*parsed.version)));
+  }
+  this->setInstanceName(makeInstanceName(name, getStrategyName()));
+}
+
+const Name&
+AccessStrategy::getStrategyName()
+{
+  static Name strategyName("/localhost/nfd/strategy/access/%FD%01");
+  return strategyName;
 }
 
 void
 AccessStrategy::afterReceiveInterest(const Face& inFace, const Interest& interest,
                                      const shared_ptr<pit::Entry>& pitEntry)
 {
-  RetxSuppression::Result suppressResult = m_retxSuppression.decide(inFace, interest, *pitEntry);
+  RetxSuppressionResult suppressResult = m_retxSuppression.decidePerPitEntry(*pitEntry);
   switch (suppressResult) {
-  case RetxSuppression::NEW:
+  case RetxSuppressionResult::NEW:
     this->afterReceiveNewInterest(inFace, interest, pitEntry);
     break;
-  case RetxSuppression::FORWARD:
+  case RetxSuppressionResult::FORWARD:
     this->afterReceiveRetxInterest(inFace, interest, pitEntry);
     break;
-  case RetxSuppression::SUPPRESS:
+  case RetxSuppressionResult::SUPPRESS:
     NFD_LOG_DEBUG(interest << " interestFrom " << inFace.getId() << " retx-suppress");
     break;
   default:
@@ -230,6 +244,7 @@ void
 AccessStrategy::updateMeasurements(const Face& inFace, const Data& data,
                                    const RttEstimator::Duration& rtt)
 {
+  ///\todo move FaceInfoTable out of AccessStrategy instance, to Measurements or somewhere else
   FaceInfo& fi = m_fit[inFace.getId()];
   fi.rtt.addMeasurement(rtt);
 

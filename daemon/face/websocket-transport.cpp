@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -77,15 +77,6 @@ WebSocketTransport::WebSocketTransport(websocketpp::connection_hdl hdl,
 }
 
 void
-WebSocketTransport::beforeChangePersistency(ndn::nfd::FacePersistency newPersistency)
-{
-  if (newPersistency != ndn::nfd::FACE_PERSISTENCY_ON_DEMAND) {
-    BOOST_THROW_EXCEPTION(
-      std::invalid_argument("WebSocketTransport supports only FACE_PERSISTENCY_ON_DEMAND"));
-  }
-}
-
-void
 WebSocketTransport::doSend(Transport::Packet&& packet)
 {
   NFD_LOG_FACE_TRACE(__func__);
@@ -126,12 +117,12 @@ WebSocketTransport::sendPing()
 {
   NFD_LOG_FACE_TRACE(__func__);
 
-  ++this->nOutPings;
-
   websocketpp::lib::error_code error;
   m_server.ping(m_handle, "NFD-WebSocket", error);
   if (error)
     return processErrorCode(error);
+
+  ++this->nOutPings;
 
   this->schedulePing();
 }
@@ -147,7 +138,7 @@ WebSocketTransport::handlePong()
 void
 WebSocketTransport::handlePongTimeout()
 {
-  NFD_LOG_FACE_WARN(__func__);
+  NFD_LOG_FACE_ERROR("Pong timeout");
   this->setState(TransportState::FAILED);
   doClose();
 }
@@ -163,8 +154,7 @@ WebSocketTransport::processErrorCode(const websocketpp::lib::error_code& error)
     // transport is shutting down, ignore any errors
     return;
 
-  NFD_LOG_FACE_WARN("Send or ping operation failed: " << error.message());
-
+  NFD_LOG_FACE_ERROR("Send or ping operation failed: " << error.message());
   this->setState(TransportState::FAILED);
   doClose();
 }

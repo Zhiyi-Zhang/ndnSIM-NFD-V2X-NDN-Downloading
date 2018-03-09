@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -31,7 +31,26 @@
 #include "tests/test-common.hpp"
 
 namespace nfd {
+namespace face {
 namespace tests {
+
+struct TestFaceParams : public FaceParams
+{
+  TestFaceParams(ndn::nfd::FacePersistency persistency,
+                 ndn::optional<time::nanoseconds> baseCongestionMarkingInterval,
+                 ndn::optional<uint64_t> defaultCongestionThreshold,
+                 bool wantLocalFields,
+                 bool wantLpReliability,
+                 boost::logic::tribool wantCongestionMarking) noexcept
+  {
+    this->persistency = persistency;
+    this->baseCongestionMarkingInterval = baseCongestionMarkingInterval;
+    this->defaultCongestionThreshold = defaultCongestionThreshold;
+    this->wantLocalFields = wantLocalFields;
+    this->wantLpReliability = wantLpReliability;
+    this->wantCongestionMarking = wantCongestionMarking;
+  }
+};
 
 struct CreateFaceExpectedResult
 {
@@ -42,12 +61,12 @@ struct CreateFaceExpectedResult
 
 inline void
 createFace(ProtocolFactory& factory,
-           const FaceUri& uri,
-           ndn::nfd::FacePersistency persistency,
-           bool wantLocalFieldsEnabled,
+           const FaceUri& remoteUri,
+           const ndn::optional<FaceUri>& localUri,
+           const TestFaceParams& params,
            const CreateFaceExpectedResult& expected)
 {
-  factory.createFace(uri, persistency, wantLocalFieldsEnabled,
+  factory.createFace({remoteUri, localUri, params},
                      [expected] (const shared_ptr<Face>&) {
                        BOOST_CHECK_EQUAL(CreateFaceExpectedResult::SUCCESS, expected.result);
                      },
@@ -58,7 +77,25 @@ createFace(ProtocolFactory& factory,
                      });
 }
 
+/** \brief check that channels in a factory equal given channel URIs
+ */
+inline void
+checkChannelListEqual(const ProtocolFactory& factory, const std::set<std::string>& channelUris)
+{
+  std::set<std::string> expected(channelUris); // make a copy so we can erase as we go
+  for (const auto& channel : factory.getChannels()) {
+    std::string uri = channel->getUri().toString();
+    if (expected.erase(uri) == 0) {
+      BOOST_ERROR("Unexpected channel " << uri);
+    }
+  }
+  for (const auto& uri : expected) {
+    BOOST_ERROR("Missing channel " << uri);
+  }
+}
+
 } // namespace tests
+} // namespace face
 } // namespace nfd
 
 #endif // NFD_TESTS_DAEMON_FACE_FACTORY_TEST_COMMON_HPP

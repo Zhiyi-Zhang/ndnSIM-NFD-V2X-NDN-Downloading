@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,7 +24,18 @@
  */
 
 #include "multicast-udp-transport.hpp"
+#include "socket-utils.hpp"
 #include "udp-protocol.hpp"
+
+#include "core/privilege-helper.hpp"
+
+#include <boost/functional/hash.hpp>
+
+#ifdef __linux__
+#include <cerrno>       // for errno
+#include <cstring>      // for std::strerror()
+#include <sys/socket.h> // for setsockopt()
+#endif // __linux__
 
 namespace nfd {
 namespace face {
@@ -32,31 +43,43 @@ namespace face {
 NFD_LOG_INCLASS_2TEMPLATE_SPECIALIZATION_DEFINE(DatagramTransport, MulticastUdpTransport::protocol,
                                                 Multicast, "MulticastUdpTransport");
 
-MulticastUdpTransport::MulticastUdpTransport(const protocol::endpoint& localEndpoint,
-                                             const protocol::endpoint& multicastGroup,
+MulticastUdpTransport::MulticastUdpTransport(const protocol::endpoint& multicastGroup,
                                              protocol::socket&& recvSocket,
-                                             protocol::socket&& sendSocket)
+                                             protocol::socket&& sendSocket,
+                                             ndn::nfd::LinkType linkType)
   : DatagramTransport(std::move(recvSocket))
   , m_multicastGroup(multicastGroup)
   , m_sendSocket(std::move(sendSocket))
 {
-  this->setLocalUri(FaceUri(localEndpoint));
+  this->setLocalUri(FaceUri(m_sendSocket.local_endpoint()));
   this->setRemoteUri(FaceUri(multicastGroup));
   this->setScope(ndn::nfd::FACE_SCOPE_NON_LOCAL);
   this->setPersistency(ndn::nfd::FACE_PERSISTENCY_PERMANENT);
-  this->setLinkType(ndn::nfd::LINK_TYPE_MULTI_ACCESS);
-  this->setMtu(udp::computeMtu(localEndpoint));
+  this->setLinkType(linkType);
+  this->setMtu(udp::computeMtu(m_sendSocket.local_endpoint()));
+
+  protocol::socket::send_buffer_size sendBufferSizeOption;
+  boost::system::error_code error;
+  m_sendSocket.get_option(sendBufferSizeOption);
+  if (error) {
+    NFD_LOG_FACE_WARN("Failed to obtain send queue capacity from socket: " << error.message());
+    this->setSendQueueCapacity(QUEUE_ERROR);
+  }
+  else {
+    this->setSendQueueCapacity(sendBufferSizeOption.value());
+  }
 
   NFD_LOG_FACE_INFO("Creating transport");
 }
 
-void
-MulticastUdpTransport::beforeChangePersistency(ndn::nfd::FacePersistency newPersistency)
+ssize_t
+MulticastUdpTransport::getSendQueueLength()
 {
-  if (newPersistency != ndn::nfd::FACE_PERSISTENCY_PERMANENT) {
-    BOOST_THROW_EXCEPTION(
-      std::invalid_argument("MulticastUdpTransport supports only FACE_PERSISTENCY_PERMANENT"));
+  ssize_t queueLength = getTxQueueLength(m_sendSocket.native_handle());
+  if (queueLength == QUEUE_ERROR) {
+    NFD_LOG_FACE_WARN("Failed to obtain send queue length from socket: " << std::strerror(errno));
   }
+  return queueLength;
 }
 
 void
@@ -87,15 +110,101 @@ MulticastUdpTransport::doClose()
   DatagramTransport::doClose();
 }
 
+static void
+bindToDevice(int fd, const std::string& ifname)
+{
+  // On Linux, if there is more than one MulticastUdpTransport for the same multicast
+  // group but they are on different network interfaces, each socket needs to be bound
+  // to the corresponding interface using SO_BINDTODEVICE, otherwise the transport will
+  // receive all packets sent to the other interfaces as well.
+  // This is needed only on Linux. On macOS, the boost::asio::ip::multicast::join_group
+  // option is sufficient to obtain the desired behavior.
+
+#ifdef __linux__
+  PrivilegeHelper::runElevated([=] {
+    if (::setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname.data(), ifname.size() + 1) < 0) {
+      BOOST_THROW_EXCEPTION(MulticastUdpTransport::Error("Cannot bind multicast rx socket to " +
+                                                         ifname + ": " + std::strerror(errno)));
+    }
+  });
+#endif // __linux__
+}
+
+void
+MulticastUdpTransport::openRxSocket(protocol::socket& sock,
+                                    const protocol::endpoint& multicastGroup,
+                                    const boost::asio::ip::address& localAddress,
+                                    const shared_ptr<const ndn::net::NetworkInterface>& netif)
+{
+  BOOST_ASSERT(!sock.is_open());
+
+  sock.open(multicastGroup.protocol());
+  sock.set_option(protocol::socket::reuse_address(true));
+
+  if (multicastGroup.address().is_v4()) {
+    BOOST_ASSERT(localAddress.is_v4());
+    sock.bind(multicastGroup);
+    sock.set_option(boost::asio::ip::multicast::join_group(multicastGroup.address().to_v4(),
+                                                           localAddress.to_v4()));
+  }
+  else {
+    BOOST_ASSERT(localAddress.is_v6());
+    sock.set_option(boost::asio::ip::v6_only(true));
+#ifdef WITH_TESTS
+    // To simplify unit tests, we bind to the "any" IPv6 address if the supplied multicast
+    // address lacks a scope id. Calling bind() without a scope id would otherwise fail.
+    if (multicastGroup.address().to_v6().scope_id() == 0)
+      sock.bind(protocol::endpoint(boost::asio::ip::address_v6::any(), multicastGroup.port()));
+    else
+#endif
+      sock.bind(multicastGroup);
+    sock.set_option(boost::asio::ip::multicast::join_group(multicastGroup.address().to_v6()));
+  }
+
+  if (netif)
+    bindToDevice(sock.native_handle(), netif->getName());
+}
+
+void
+MulticastUdpTransport::openTxSocket(protocol::socket& sock,
+                                    const protocol::endpoint& localEndpoint,
+                                    const shared_ptr<const ndn::net::NetworkInterface>& netif,
+                                    bool enableLoopback)
+{
+  BOOST_ASSERT(!sock.is_open());
+
+  sock.open(localEndpoint.protocol());
+  sock.set_option(protocol::socket::reuse_address(true));
+  sock.set_option(boost::asio::ip::multicast::enable_loopback(enableLoopback));
+
+  if (localEndpoint.address().is_v4()) {
+    sock.bind(localEndpoint);
+    if (!localEndpoint.address().is_unspecified())
+      sock.set_option(boost::asio::ip::multicast::outbound_interface(localEndpoint.address().to_v4()));
+  }
+  else {
+    sock.set_option(boost::asio::ip::v6_only(true));
+    sock.bind(localEndpoint);
+    if (netif)
+      sock.set_option(boost::asio::ip::multicast::outbound_interface(netif->getIndex()));
+  }
+}
+
 template<>
 Transport::EndpointId
 DatagramTransport<boost::asio::ip::udp, Multicast>::makeEndpointId(const protocol::endpoint& ep)
 {
-  // IPv6 multicast is not supported
-  BOOST_ASSERT(ep.address().is_v4());
-
-  return (static_cast<uint64_t>(ep.port()) << 32) |
-          static_cast<uint64_t>(ep.address().to_v4().to_ulong());
+  if (ep.address().is_v4()) {
+    return (static_cast<uint64_t>(ep.port()) << 32) |
+            static_cast<uint64_t>(ep.address().to_v4().to_ulong());
+  }
+  else {
+    size_t seed = 0;
+    const auto& addrBytes = ep.address().to_v6().to_bytes();
+    boost::hash_range(seed, addrBytes.begin(), addrBytes.end());
+    boost::hash_combine(seed, ep.port());
+    return seed;
+  }
 }
 
 } // namespace face

@@ -32,15 +32,22 @@ namespace strategy_choice {
 
 Entry::Entry(const Name& prefix)
   : m_prefix(prefix)
-  , m_strategy(nullptr)
   , m_nameTreeEntry(nullptr)
 {
 }
 
+Entry::~Entry() = default;
+
 const Name&
-Entry::getStrategyName() const
+Entry::getStrategyInstanceName() const
 {
-  return m_strategy->getName();
+  return this->getStrategy().getInstanceName();
+}
+
+void
+Entry::setStrategy(unique_ptr<fw::Strategy> strategy)
+{
+  m_strategy = std::move(strategy);
 }
 
 } // namespace strategy_choice

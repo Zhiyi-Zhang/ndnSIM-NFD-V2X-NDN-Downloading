@@ -1,6 +1,9 @@
 Notes for NFD developers
 ========================
 
+If you are new to the NDN software community, please read the
+[Contributor's Guide](https://github.com/named-data/NFD/blob/master/CONTRIBUTING.md)
+
 Requirements
 ------------
 
@@ -11,7 +14,7 @@ files:
 Include the following license boilerplate into all `.hpp` and `.cpp` files:
 
     /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-    /**
+    /*
      * Copyright (c) [Year(s)],  [Copyright Holder(s)].
      *
      * This file is part of NFD (Named Data Networking Forwarding Daemon).
@@ -30,12 +33,12 @@ Include the following license boilerplate into all `.hpp` and `.cpp` files:
      */
 
 If you are affiliated to an NSF-supported NDN project institution, please use the [NDN Team License
-Boilerplate](http://redmine.named-data.net/projects/nfd/wiki/NDN_Team_License_Boilerplate_(NFD)).
+Boilerplate](https://redmine.named-data.net/projects/nfd/wiki/NDN_Team_License_Boilerplate_(NFD)).
 
 Recommendations
 ---------------
 
-NFD code is subject to NFD [code style](http://redmine.named-data.net/projects/nfd/wiki/CodeStyle).
+NFD code is subject to NFD [code style](https://redmine.named-data.net/projects/nfd/wiki/CodeStyle).
 
 
 Running unit-tests

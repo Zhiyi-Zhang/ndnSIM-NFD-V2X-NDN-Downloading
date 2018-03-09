@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,10 +24,11 @@
  */
 
 #include "core/network-interface-predicate.hpp"
-#include "core/network-interface.hpp"
 
 #include "tests/test-common.hpp"
 
+#include <ndn-cxx/net/ethernet.hpp>
+#include <ndn-cxx/net/network-monitor-stub.hpp>
 #include <boost/property_tree/info_parser.hpp>
 #include <sstream>
 
@@ -40,27 +41,47 @@ protected:
   NetworkInterfacePredicateFixture()
   {
     using namespace boost::asio::ip;
-    interfaces.push_back(
-      NetworkInterfaceInfo{0, "eth0",
-        ethernet::Address::fromString("3e:15:c2:8b:65:00"),
-        {address_v4::from_string("129.82.100.1")},
-        {},
-        address_v4::from_string("129.82.255.255"),
-        IFF_UP});
-    interfaces.push_back(
-      NetworkInterfaceInfo{1, "eth1",
-        ethernet::Address::fromString("3e:15:c2:8b:65:01"),
-        {address_v4::from_string("192.168.2.1")},
-        {},
-        address_v4::from_string("192.168.2.255"),
-        IFF_UP});
-    interfaces.push_back(
-      NetworkInterfaceInfo{2, "eth2",
-        ethernet::Address::fromString("3e:15:c2:8b:65:02"),
-        {address_v4::from_string("198.51.100.1")},
-        {address_v6::from_string("2001:db8::1")},
-        address_v4::from_string("198.51.100.255"),
-        IFF_MULTICAST | IFF_BROADCAST | IFF_UP});
+    using namespace ndn::net;
+    namespace ethernet = ndn::ethernet;
+
+    netifs.push_back(NetworkMonitorStub::makeNetworkInterface());
+    netifs.back()->setIndex(0);
+    netifs.back()->setName("eth0");
+    netifs.back()->setEthernetAddress(ethernet::Address::fromString("3e:15:c2:8b:65:00"));
+    netifs.back()->addNetworkAddress(NetworkAddress(AddressFamily::V4,
+      address_v4::from_string("129.82.100.1"), address_v4::from_string("129.82.255.255"),
+      16, AddressScope::GLOBAL, 0));
+    netifs.back()->setFlags(IFF_UP);
+
+    netifs.push_back(NetworkMonitorStub::makeNetworkInterface());
+    netifs.back()->setIndex(1);
+    netifs.back()->setName("eth1");
+    netifs.back()->setEthernetAddress(ethernet::Address::fromString("3e:15:c2:8b:65:01"));
+    netifs.back()->addNetworkAddress(NetworkAddress(AddressFamily::V4,
+      address_v4::from_string("192.168.2.1"), address_v4::from_string("192.168.2.255"),
+      24, AddressScope::GLOBAL, 0));
+    netifs.back()->setFlags(IFF_UP);
+
+    netifs.push_back(NetworkMonitorStub::makeNetworkInterface());
+    netifs.back()->setIndex(2);
+    netifs.back()->setName("eth2");
+    netifs.back()->setEthernetAddress(ethernet::Address::fromString("3e:15:c2:8b:65:02"));
+    netifs.back()->addNetworkAddress(NetworkAddress(AddressFamily::V4,
+      address_v4::from_string("198.51.100.1"), address_v4::from_string("198.51.100.255"),
+      24, AddressScope::GLOBAL, 0));
+    netifs.back()->addNetworkAddress(NetworkAddress(AddressFamily::V6,
+      address_v6::from_string("2001:db8::1"), address_v6::from_string("2001:db8::ffff"),
+      112, AddressScope::GLOBAL, 0));
+    netifs.back()->setFlags(IFF_MULTICAST | IFF_BROADCAST | IFF_UP);
+
+    netifs.push_back(NetworkMonitorStub::makeNetworkInterface());
+    netifs.back()->setIndex(3);
+    netifs.back()->setName("enp68s0f1");
+    netifs.back()->setEthernetAddress(ethernet::Address::fromString("3e:15:c2:8b:65:03"));
+    netifs.back()->addNetworkAddress(NetworkAddress(AddressFamily::V4,
+      address_v4::from_string("192.168.2.3"), address_v4::from_string("192.168.2.255"),
+      24, AddressScope::GLOBAL, 0));
+    netifs.back()->setFlags(IFF_UP);
   }
 
   void
@@ -82,7 +103,7 @@ protected:
 
 protected:
   NetworkInterfacePredicate predicate;
-  std::vector<NetworkInterfaceInfo> interfaces;
+  std::vector<shared_ptr<ndn::net::NetworkInterface>> netifs;
 };
 
 BOOST_FIXTURE_TEST_SUITE(TestNetworkInterfacePredicate, NetworkInterfacePredicateFixture)
@@ -91,9 +112,10 @@ BOOST_AUTO_TEST_CASE(Default)
 {
   parseConfig("");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), true);
 }
 
 BOOST_AUTO_TEST_CASE(EmptyWhitelist)
@@ -102,9 +124,10 @@ BOOST_AUTO_TEST_CASE(EmptyWhitelist)
               "{\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
 }
 
 BOOST_AUTO_TEST_CASE(WildcardBlacklist)
@@ -114,9 +137,10 @@ BOOST_AUTO_TEST_CASE(WildcardBlacklist)
               "  *\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
 }
 
 BOOST_AUTO_TEST_CASE(IfnameWhitelist)
@@ -127,9 +151,10 @@ BOOST_AUTO_TEST_CASE(IfnameWhitelist)
               "  ifname eth1\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
 }
 
 BOOST_AUTO_TEST_CASE(IfnameBlacklist)
@@ -140,9 +165,75 @@ BOOST_AUTO_TEST_CASE(IfnameBlacklist)
               "  ifname eth1\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), true);
+}
+
+BOOST_AUTO_TEST_CASE(IfnameWildcardStart)
+{
+  parseConfig("whitelist\n"
+              "{\n"
+              "  ifname enp*\n"
+              "}");
+
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), true);
+}
+
+BOOST_AUTO_TEST_CASE(IfnameWildcardMiddle)
+{
+  parseConfig("whitelist\n"
+              "{\n"
+              "  ifname *th*\n"
+              "}");
+
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
+}
+
+BOOST_AUTO_TEST_CASE(IfnameWildcardDouble)
+{
+  parseConfig("whitelist\n"
+              "{\n"
+              "  ifname eth**\n"
+              "}");
+
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
+}
+
+BOOST_AUTO_TEST_CASE(IfnameWildcardOnly)
+{
+  parseConfig("whitelist\n"
+              "{\n"
+              "  ifname *\n"
+              "}");
+
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), true);
+}
+
+BOOST_AUTO_TEST_CASE(IfnameQuestionMark)
+{
+  parseConfig("whitelist\n"
+              "{\n"
+              "  ifname eth?\n"
+              "}");
+
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
 }
 
 BOOST_AUTO_TEST_CASE(IfnameMalformed)
@@ -163,9 +254,10 @@ BOOST_AUTO_TEST_CASE(EtherWhitelist)
               "  ether 3e:15:c2:8b:65:01\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
 }
 
 BOOST_AUTO_TEST_CASE(EtherBlacklist)
@@ -176,9 +268,10 @@ BOOST_AUTO_TEST_CASE(EtherBlacklist)
               "  ether 3e:15:c2:8b:65:01\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), true);
 }
 
 BOOST_AUTO_TEST_CASE(EtherMalformed)
@@ -198,9 +291,10 @@ BOOST_AUTO_TEST_CASE(SubnetWhitelist)
               "  subnet 192.168.0.0/16\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), true);
 }
 
 BOOST_AUTO_TEST_CASE(SubnetBlacklist)
@@ -210,9 +304,10 @@ BOOST_AUTO_TEST_CASE(SubnetBlacklist)
               "  subnet 192.168.0.0/16\n"
               "}");
 
-  BOOST_CHECK_EQUAL(predicate(interfaces[0]), true);
-  BOOST_CHECK_EQUAL(predicate(interfaces[1]), false);
-  BOOST_CHECK_EQUAL(predicate(interfaces[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[0]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[1]), false);
+  BOOST_CHECK_EQUAL(predicate(*netifs[2]), true);
+  BOOST_CHECK_EQUAL(predicate(*netifs[3]), false);
 }
 
 BOOST_AUTO_TEST_CASE(SubnetMalformed)

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -30,26 +30,30 @@ namespace nfd {
 namespace fw {
 
 NFD_LOG_INIT("ClientControlStrategy");
-
-const Name ClientControlStrategy::STRATEGY_NAME("ndn:/localhost/nfd/strategy/client-control/%FD%02");
 NFD_REGISTER_STRATEGY(ClientControlStrategy);
 
 ClientControlStrategy::ClientControlStrategy(Forwarder& forwarder, const Name& name)
-  : BestRouteStrategy(forwarder, name)
+  : BestRouteStrategyBase(forwarder)
 {
+  ParsedInstanceName parsed = parseInstanceName(name);
+  if (!parsed.parameters.empty()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument("ClientControlStrategy does not accept parameters"));
+  }
+  if (parsed.version && *parsed.version != getStrategyName()[-1].toVersion()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument(
+      "ClientControlStrategy does not support version " + to_string(*parsed.version)));
+  }
+  this->setInstanceName(makeInstanceName(name, getStrategyName()));
+
+  NFD_LOG_WARN("NextHopFaceId field is honored universally and "
+               "it's unnecessary to set client-control strategy.");
 }
 
-void
-ClientControlStrategy::afterReceiveInterest(const Face& inFace, const Interest& interest,
-                                            const shared_ptr<pit::Entry>& pitEntry)
+const Name&
+ClientControlStrategy::getStrategyName()
 {
-  if (m_isFirstUse) {
-    NFD_LOG_WARN("NextHopFaceId field is honored universally and "
-                 "it's unnecessary to set client-control strategy.");
-    m_isFirstUse = false;
-  }
-
-  this->BestRouteStrategy::afterReceiveInterest(inFace, interest, pitEntry);
+  static Name strategyName("/localhost/nfd/strategy/client-control/%FD%02");
+  return strategyName;
 }
 
 } // namespace fw

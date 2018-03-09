@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -60,6 +60,8 @@ LinkService::sendInterest(const Interest& interest)
   ++this->nOutInterests;
 
   doSendInterest(interest);
+
+  afterSendInterest(interest);
 }
 
 void
@@ -71,6 +73,8 @@ LinkService::sendData(const Data& data)
   ++this->nOutData;
 
   doSendData(data);
+
+  afterSendData(data);
 }
 
 void
@@ -82,6 +86,8 @@ LinkService::sendNack(const ndn::lp::Nack& nack)
   ++this->nOutNacks;
 
   doSendNack(nack);
+
+  afterSendNack(nack);
 }
 
 void
@@ -112,6 +118,13 @@ LinkService::receiveNack(const ndn::lp::Nack& nack)
   ++this->nInNacks;
 
   afterReceiveNack(nack);
+}
+
+void
+LinkService::notifyDroppedInterest(const Interest& interest)
+{
+  ++this->nDroppedInterests;
+  onDroppedInterest(interest);
 }
 
 std::ostream&

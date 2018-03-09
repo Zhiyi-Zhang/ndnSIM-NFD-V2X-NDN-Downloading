@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -41,12 +41,13 @@ struct StatusReportOptions
   bool wantFaces = false;
   bool wantFib = false;
   bool wantRib = false;
+  bool wantCs = false;
   bool wantStrategyChoice = false;
 };
 
 /** \brief collect a status report and write to stdout
  */
-int
+void
 reportStatus(ExecuteContext& ctx, const StatusReportOptions& options);
 
 /** \brief registers status commands
@@ -54,7 +55,6 @@ reportStatus(ExecuteContext& ctx, const StatusReportOptions& options);
  *  Providing the following commands:
  *  \li status report
  *  \li status show
- *  \li face list
  *  \li channel list
  *  \li strategy list
  *  \li fib list

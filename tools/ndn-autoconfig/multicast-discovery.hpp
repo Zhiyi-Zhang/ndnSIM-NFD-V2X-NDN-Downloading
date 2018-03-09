@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,69 +26,65 @@
 #ifndef NFD_TOOLS_NDN_AUTOCONFIG_MULTICAST_DISCOVERY_HPP
 #define NFD_TOOLS_NDN_AUTOCONFIG_MULTICAST_DISCOVERY_HPP
 
-#include "base.hpp"
-
-#include <ndn-cxx/security/validator-null.hpp>
+#include "stage.hpp"
+#include <ndn-cxx/face.hpp>
+#include <ndn-cxx/mgmt/nfd/controller.hpp>
+#include <ndn-cxx/mgmt/nfd/face-status.hpp>
 
 namespace ndn {
 namespace tools {
 namespace autoconfig {
 
-/**
- * @brief Multicast discovery stage
+/** \brief multicast discovery stage
  *
- * - Request
+ *  This stage locates an NDN gateway router, commonly known as a "hub", in the local network by
+ *  sending a hub discovery Interest ndn:/localhop/ndn-autoconf/hub via multicast. This class
+ *  configures routes and strategy on local NFD, so that this Interest is multicast to all
+ *  multi-access faces.
  *
- *     The end host sends an Interest over a multicast face.
+ *  If an NDN gateway router is present in the local network, it should reply with a Data
+ *  containing its own FaceUri. The Data payload contains a Uri element, and the value of this
+ *  element is an ASCII-encoded string of the router's FaceUri. The router may use
+ *  ndn-autoconfig-server program to serve this Data.
  *
- *     Interest Name is /localhop/ndn-autoconf/hub.
- *
- * - Response
- *
- *     A producer app on the HUB answer this Interest with a Data packet that contains a
- *     TLV-encoded Uri block.  The value of this block is the URI for the HUB, preferably a
- *     UDP tunnel.
+ *  Signature on this Data is currently not verified. This stage succeeds when the Data is
+ *  successfully decoded.
  */
-class MulticastDiscovery : public Base
+class MulticastDiscovery : public Stage
 {
 public:
-  /**
-   * @brief Create multicast discovery stage
-   * @sa Base::Base
-   */
-  MulticastDiscovery(Face& face, KeyChain& keyChain, const NextStageCallback& nextStageOnFailure);
+  MulticastDiscovery(Face& face, nfd::Controller& controller);
 
-  virtual void
-  start() override;
+  const std::string&
+  getName() const final
+  {
+    static const std::string STAGE_NAME("multicast discovery");
+    return STAGE_NAME;
+  }
 
 private:
   void
-  registerHubDiscoveryPrefix(const ConstBufferPtr& buffer);
+  doStart() final;
 
   void
-  onRegisterSuccess();
+  registerHubDiscoveryPrefix(const std::vector<nfd::FaceStatus>& dataset);
 
   void
-  onRegisterFailure(const nfd::ControlResponse& response);
+  afterReg();
 
   void
   setStrategy();
 
   void
-  onSetStrategyFailure(const nfd::ControlResponse& response);
-
-  // Start to look for a hub (NDN hub discovery first stage)
-  void
   requestHubData();
 
-  void
-  onSuccess(Data& data);
-
 private:
-  size_t nRequestedRegs;
-  size_t nFinishedRegs;
+  Face& m_face;
+  nfd::Controller& m_controller;
 
-  ndn::ValidatorNull m_validator;
+  int m_nRegs = 0;
+  int m_nRegSuccess = 0;
+  int m_nRegFailure = 0;
 };
 
 } // namespace autoconfig

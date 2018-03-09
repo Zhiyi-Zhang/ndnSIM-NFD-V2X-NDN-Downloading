@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,9 +24,6 @@
  */
 
 #include "nfdc/command-definition.hpp"
-#include "nfdc/status-report.hpp"
-#include <ndn-cxx/encoding/nfd-constants.hpp>
-#include <ndn-cxx/util/face-uri.hpp>
 
 #include "tests/test-common.hpp"
 
@@ -36,9 +33,6 @@ namespace nfdc {
 namespace tests {
 
 using namespace nfd::tests;
-
-using ndn::util::FaceUri;
-using ndn::nfd::FacePersistency;
 
 BOOST_AUTO_TEST_SUITE(Nfdc)
 BOOST_FIXTURE_TEST_SUITE(TestCommandDefinition, BaseFixture)
@@ -313,6 +307,28 @@ BOOST_AUTO_TEST_CASE(FacePersistencyType)
 
   // nfdc does not accept "on-demand"
   BOOST_CHECK_THROW(cs.parse(std::vector<std::string>{"a", "on-demand"}), CommandDefinition::Error);
+}
+
+BOOST_AUTO_TEST_CASE(RouteOriginType)
+{
+  CommandDefinition cs("noun", "verb");
+  cs.addArg("a", ArgValueType::ROUTE_ORIGIN, Required::YES);
+
+  CommandArguments ca;
+
+  ca = cs.parse(std::vector<std::string>{"a", "Nlsr"});
+  BOOST_CHECK_EQUAL(ca.size(), 1);
+  BOOST_CHECK(ca.at("a").type() == typeid(RouteOrigin));
+  BOOST_CHECK_EQUAL(ca.get<RouteOrigin>("a"),
+                    RouteOrigin::ROUTE_ORIGIN_NLSR);
+
+  ca = cs.parse(std::vector<std::string>{"a", "27"});
+  BOOST_CHECK_EQUAL(ca.size(), 1);
+  BOOST_CHECK(ca.at("a").type() == typeid(RouteOrigin));
+  BOOST_CHECK_EQUAL(ca.get<RouteOrigin>("a"),
+                    static_cast<RouteOrigin>(27));
+
+  BOOST_CHECK_THROW(cs.parse(std::vector<std::string>{"a", "not-RouteOrigin"}), CommandDefinition::Error);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // ParseValue

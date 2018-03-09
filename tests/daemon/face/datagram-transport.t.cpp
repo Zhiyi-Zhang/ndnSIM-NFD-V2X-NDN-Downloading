@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,6 +26,8 @@
 #include "unicast-udp-transport-fixture.hpp"
 #include "multicast-udp-transport-fixture.hpp"
 
+#include "transport-test-common.hpp"
+
 #include <boost/mpl/vector.hpp>
 
 namespace nfd {
@@ -35,14 +37,16 @@ namespace tests {
 BOOST_AUTO_TEST_SUITE(Face)
 BOOST_AUTO_TEST_SUITE(TestDatagramTransport)
 
-typedef boost::mpl::vector<UnicastUdpTransportFixture,
-                           MulticastUdpTransportFixture
-                           > DatagramTransportFixtures;
+using DatagramTransportFixtures = boost::mpl::vector<
+  GENERATE_IP_TRANSPORT_FIXTURE_INSTANTIATIONS(UnicastUdpTransportFixture),
+  IpTransportFixture<MulticastUdpTransportFixture, AddressFamily::V4, AddressScope::Global, MulticastInterface::Yes>,
+  IpTransportFixture<MulticastUdpTransportFixture, AddressFamily::V6, AddressScope::LinkLocal, MulticastInterface::Yes>,
+  IpTransportFixture<MulticastUdpTransportFixture, AddressFamily::V6, AddressScope::Global, MulticastInterface::Yes>
+>;
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(Send, T, DatagramTransportFixtures, T)
 {
-  SKIP_IF_IP_UNAVAILABLE(this->defaultAddr);
-  this->initialize(this->defaultAddr);
+  TRANSPORT_TEST_INIT();
 
   auto block1 = ndn::encoding::makeStringBlock(300, "hello");
   this->transport->send(Transport::Packet{Block{block1}}); // make a copy of the block
@@ -58,8 +62,7 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(Send, T, DatagramTransportFixtures, T)
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveNormal, T, DatagramTransportFixtures, T)
 {
-  SKIP_IF_IP_UNAVAILABLE(this->defaultAddr);
-  this->initialize(this->defaultAddr);
+  TRANSPORT_TEST_INIT();
 
   Block pkt = ndn::encoding::makeStringBlock(300, "hello");
   ndn::Buffer buf(pkt.begin(), pkt.end());
@@ -73,13 +76,9 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveNormal, T, DatagramTransportFixtures, T)
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveIncomplete, T, DatagramTransportFixtures, T)
 {
-  SKIP_IF_IP_UNAVAILABLE(this->defaultAddr);
-  this->initialize(this->defaultAddr);
+  TRANSPORT_TEST_INIT();
 
-  std::vector<uint8_t> buf{
-    0x05, 0x03, 0x00, 0x01,
-  };
-  this->remoteWrite(buf);
+  this->remoteWrite({0x05, 0x03, 0x00, 0x01});
 
   BOOST_CHECK_EQUAL(this->transport->getCounters().nInPackets, 0);
   BOOST_CHECK_EQUAL(this->transport->getCounters().nInBytes, 0);
@@ -89,14 +88,13 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveIncomplete, T, DatagramTransportFixtures
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTrailingGarbage, T, DatagramTransportFixtures, T)
 {
-  SKIP_IF_IP_UNAVAILABLE(this->defaultAddr);
-  this->initialize(this->defaultAddr);
+  TRANSPORT_TEST_INIT();
 
   Block pkt1 = ndn::encoding::makeStringBlock(300, "hello");
   Block pkt2 = ndn::encoding::makeStringBlock(301, "world");
   ndn::Buffer buf(pkt1.size() + pkt2.size());
-  std::copy(pkt1.begin(), pkt1.end(), buf.buf());
-  std::copy(pkt2.begin(), pkt2.end(), buf.buf() + pkt1.size());
+  std::copy(pkt1.begin(), pkt1.end(), buf.begin());
+  std::copy(pkt2.begin(), pkt2.end(), buf.begin() + pkt1.size());
 
   this->remoteWrite(buf);
 
@@ -108,8 +106,7 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTrailingGarbage, T, DatagramTransportFix
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTooLarge, T, DatagramTransportFixtures, T)
 {
-  SKIP_IF_IP_UNAVAILABLE(this->defaultAddr);
-  this->initialize(this->defaultAddr);
+  TRANSPORT_TEST_INIT();
 
   std::vector<uint8_t> bytes(ndn::MAX_NDN_PACKET_SIZE, 0);
   Block pkt1 = ndn::encoding::makeBinaryBlock(300, bytes.data(), bytes.size() - 6);
@@ -137,18 +134,29 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTooLarge, T, DatagramTransportFixtures, 
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(Close, T, DatagramTransportFixtures, T)
 {
-  SKIP_IF_IP_UNAVAILABLE(this->defaultAddr);
-  this->initialize(this->defaultAddr);
+  TRANSPORT_TEST_INIT();
+
+  this->transport->afterStateChange.connectSingleShot([] (TransportState oldState, TransportState newState) {
+    BOOST_CHECK_EQUAL(oldState, TransportState::UP);
+    BOOST_CHECK_EQUAL(newState, TransportState::CLOSING);
+  });
 
   this->transport->close();
-  BOOST_CHECK_EQUAL(this->transport->getState(), TransportState::CLOSING);
 
   this->transport->afterStateChange.connectSingleShot([this] (TransportState oldState, TransportState newState) {
     BOOST_CHECK_EQUAL(oldState, TransportState::CLOSING);
     BOOST_CHECK_EQUAL(newState, TransportState::CLOSED);
     this->limitedIo.afterOp();
   });
+
   BOOST_REQUIRE_EQUAL(this->limitedIo.run(1, time::seconds(1)), LimitedIo::EXCEED_OPS);
+}
+
+BOOST_FIXTURE_TEST_CASE_TEMPLATE(SendQueueLength, T, DatagramTransportFixtures, T)
+{
+  TRANSPORT_TEST_INIT();
+
+  BOOST_CHECK_EQUAL(this->transport->getSendQueueLength(), 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestDatagramTransport

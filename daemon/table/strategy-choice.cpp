@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,15 +24,18 @@
  */
 
 #include "strategy-choice.hpp"
+#include "measurements-entry.hpp"
+#include "pit-entry.hpp"
+#include "core/asserts.hpp"
 #include "core/logger.hpp"
 #include "fw/strategy.hpp"
-#include "pit-entry.hpp"
-#include "measurements-entry.hpp"
 
 namespace nfd {
 namespace strategy_choice {
 
 using fw::Strategy;
+
+NFD_ASSERT_FORWARD_ITERATOR(StrategyChoice::const_iterator);
 
 NFD_LOG_INIT("StrategyChoice");
 
@@ -42,92 +45,95 @@ nteHasStrategyChoiceEntry(const name_tree::Entry& nte)
   return nte.getStrategyChoiceEntry() != nullptr;
 }
 
-StrategyChoice::StrategyChoice(NameTree& nameTree, unique_ptr<Strategy> defaultStrategy)
-  : m_nameTree(nameTree)
+StrategyChoice::StrategyChoice(Forwarder& forwarder)
+  : m_forwarder(forwarder)
+  , m_nameTree(m_forwarder.getNameTree())
   , m_nItems(0)
 {
-  this->setDefaultStrategy(std::move(defaultStrategy));
 }
 
-bool
-StrategyChoice::hasStrategy(const Name& strategyName, bool isExact) const
+void
+StrategyChoice::setDefaultStrategy(const Name& strategyName)
 {
-  if (isExact) {
-    return m_strategyInstances.count(strategyName) > 0;
-  }
-  else {
-    return this->getStrategy(strategyName) != nullptr;
-  }
+  auto entry = make_unique<Entry>(Name());
+  entry->setStrategy(Strategy::create(strategyName, m_forwarder));
+  NFD_LOG_INFO("setDefaultStrategy " << entry->getStrategyInstanceName());
+
+  // don't use .insert here, because it will invoke findEffectiveStrategy
+  // which expects an existing root entry
+  name_tree::Entry& nte = m_nameTree.lookup(Name());
+  nte.setStrategyChoiceEntry(std::move(entry));
+  ++m_nItems;
 }
 
-std::pair<bool, Strategy*>
-StrategyChoice::install(unique_ptr<Strategy> strategy)
-{
-  BOOST_ASSERT(strategy != nullptr);
-  Name strategyName = strategy->getName();
-  // copying Name, so that strategyName remains available even if strategy is deallocated
-
-  bool isInserted = false;
-  StrategyInstanceTable::iterator it;
-  std::tie(it, isInserted) = m_strategyInstances.emplace(strategyName, std::move(strategy));
-
-  if (!isInserted) {
-    NFD_LOG_ERROR("install(" << strategyName << ") duplicate strategyName");
-  }
-  return std::make_pair(isInserted, it->second.get());
-}
-
-Strategy*
-StrategyChoice::getStrategy(const Name& strategyName) const
-{
-  Strategy* candidate = nullptr;
-  for (auto it = m_strategyInstances.lower_bound(strategyName);
-       it != m_strategyInstances.end() && strategyName.isPrefixOf(it->first); ++it) {
-    switch (it->first.size() - strategyName.size()) {
-    case 0: // exact match
-      return it->second.get();
-    case 1: // unversioned strategyName matches versioned strategy
-      candidate = it->second.get();
-      break;
-    }
-  }
-  return candidate;
-}
-
-bool
+StrategyChoice::InsertResult
 StrategyChoice::insert(const Name& prefix, const Name& strategyName)
 {
-  Strategy* strategy = this->getStrategy(strategyName);
-  if (strategy == nullptr) {
-    NFD_LOG_ERROR("insert(" << prefix << "," << strategyName << ") strategy not installed");
-    return false;
+  if (prefix.size() > NameTree::getMaxDepth()) {
+    return InsertResult::DEPTH_EXCEEDED;
   }
 
-  name_tree::Entry& nte = m_nameTree.lookup(prefix);
+  unique_ptr<Strategy> strategy;
+  try {
+    strategy = Strategy::create(strategyName, m_forwarder);
+  }
+  catch (const std::invalid_argument& e) {
+    NFD_LOG_ERROR("insert(" << prefix << "," << strategyName << ") cannot create strategy: " << e.what());
+    return InsertResult(InsertResult::EXCEPTION, e.what());
+  }
+
+  if (strategy == nullptr) {
+    NFD_LOG_ERROR("insert(" << prefix << "," << strategyName << ") strategy not registered");
+    return InsertResult::NOT_REGISTERED;
+  }
+
+  name_tree::Entry& nte = m_nameTree.lookup(prefix, true);
   Entry* entry = nte.getStrategyChoiceEntry();
   Strategy* oldStrategy = nullptr;
   if (entry != nullptr) {
-    if (entry->getStrategy().getName() == strategy->getName()) {
-      NFD_LOG_TRACE("insert(" << prefix << ") not changing " << strategy->getName());
-      return true;
+    if (entry->getStrategyInstanceName() == strategy->getInstanceName()) {
+      NFD_LOG_TRACE("insert(" << prefix << ") not changing " << strategy->getInstanceName());
+      return InsertResult::OK;
     }
     oldStrategy = &entry->getStrategy();
-    NFD_LOG_TRACE("insert(" << prefix << ") changing from " << oldStrategy->getName() <<
-                  " to " << strategy->getName());
+    NFD_LOG_TRACE("insert(" << prefix << ") changing from " << oldStrategy->getInstanceName() <<
+                  " to " << strategy->getInstanceName());
   }
-
-  if (entry == nullptr) {
+  else {
     oldStrategy = &this->findEffectiveStrategy(prefix);
     auto newEntry = make_unique<Entry>(prefix);
     entry = newEntry.get();
     nte.setStrategyChoiceEntry(std::move(newEntry));
     ++m_nItems;
-    NFD_LOG_TRACE("insert(" << prefix << ") new entry " << strategy->getName());
+    NFD_LOG_TRACE("insert(" << prefix << ") new entry " << strategy->getInstanceName());
   }
 
   this->changeStrategy(*entry, *oldStrategy, *strategy);
-  entry->setStrategy(*strategy);
-  return true;
+  entry->setStrategy(std::move(strategy));
+  return InsertResult::OK;
+}
+
+StrategyChoice::InsertResult::InsertResult(Status status, const std::string& exceptionMessage)
+  : m_status(status)
+  , m_exceptionMessage(exceptionMessage)
+{
+}
+
+std::ostream&
+operator<<(std::ostream& os, const StrategyChoice::InsertResult& res)
+{
+  switch (res.m_status) {
+    case StrategyChoice::InsertResult::OK:
+      return os << "OK";
+    case StrategyChoice::InsertResult::NOT_REGISTERED:
+      return os << "Strategy not registered";
+    case StrategyChoice::InsertResult::EXCEPTION:
+      return os << "Error instantiating strategy: " << res.m_exceptionMessage;
+    case StrategyChoice::InsertResult::DEPTH_EXCEEDED:
+      return os << "Prefix has too many components (limit is "
+                 << to_string(NameTree::getMaxDepth()) << ")";
+  }
+  return os;
 }
 
 void
@@ -168,7 +174,7 @@ StrategyChoice::get(const Name& prefix) const
     return {false, Name()};
   }
 
-  return {true, entry->getStrategy().getName()};
+  return {true, entry->getStrategyInstanceName()};
 }
 
 template<typename K>
@@ -198,25 +204,6 @@ StrategyChoice::findEffectiveStrategy(const measurements::Entry& measurementsEnt
   return this->findEffectiveStrategyImpl(measurementsEntry);
 }
 
-void
-StrategyChoice::setDefaultStrategy(unique_ptr<Strategy> strategy)
-{
-  bool isInstalled = false;
-  Strategy* instance = nullptr;
-  std::tie(isInstalled, instance) = this->install(std::move(strategy));
-  BOOST_ASSERT(isInstalled);
-
-  auto entry = make_unique<Entry>(Name());
-  entry->setStrategy(*instance);
-
-  // don't use .insert here, because it will invoke findEffectiveStrategy
-  // which expects an existing root entry
-  name_tree::Entry& nte = m_nameTree.lookup(Name());
-  nte.setStrategyChoiceEntry(std::move(entry));
-  ++m_nItems;
-  NFD_LOG_INFO("setDefaultStrategy " << instance->getName());
-}
-
 static inline void
 clearStrategyInfo(const name_tree::Entry& nte)
 {
@@ -239,13 +226,18 @@ clearStrategyInfo(const name_tree::Entry& nte)
 void
 StrategyChoice::changeStrategy(Entry& entry, Strategy& oldStrategy, Strategy& newStrategy)
 {
-  if (&oldStrategy == &newStrategy) {
+  const Name& oldInstanceName = oldStrategy.getInstanceName();
+  const Name& newInstanceName = newStrategy.getInstanceName();
+  if (Strategy::areSameType(oldInstanceName, newInstanceName)) {
+    // same Strategy subclass type: no need to clear StrategyInfo
+    NFD_LOG_INFO("changeStrategy(" << entry.getPrefix() << ") "
+                 << oldInstanceName << " -> " << newInstanceName
+                 << " same-type");
     return;
   }
 
-  NFD_LOG_INFO("changeStrategy(" << entry.getPrefix() << ")"
-               << " from " << oldStrategy.getName()
-               << " to " << newStrategy.getName());
+  NFD_LOG_INFO("changeStrategy(" << entry.getPrefix() << ") "
+               << oldInstanceName << " -> " << newInstanceName);
 
   // reset StrategyInfo on a portion of NameTree,
   // where entry's effective strategy is covered by the changing StrategyChoice entry

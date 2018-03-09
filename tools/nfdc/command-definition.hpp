@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -49,6 +49,12 @@ enum class ArgValueType {
    */
   ANY,
 
+  /** \brief boolean
+   *
+   * The argument appears in CommandArguments as bool.
+   */
+  BOOLEAN,
+
   /** \brief non-negative integer
    *
    *  The argument appears in CommandArguments as uint64_t.
@@ -76,13 +82,13 @@ enum class ArgValueType {
 
   /** \brief FaceUri
    *
-   *  The argument appears in CommandArguments as ndn::util::FaceUri.
+   *  The argument appears in CommandArguments as ndn::FaceUri.
    */
   FACE_URI,
 
   /** \brief FaceId or FaceUri
    *
-   *  The argument appears in CommandArguments as either uint64_t or ndn::util::FaceUri.
+   *  The argument appears in CommandArguments as either uint64_t or ndn::FaceUri.
    */
   FACE_ID_OR_URI,
 
@@ -90,7 +96,13 @@ enum class ArgValueType {
    *
    *  The argument appears in CommandArguments as ndn::nfd::FacePersistency.
    */
-  FACE_PERSISTENCY
+  FACE_PERSISTENCY,
+
+  /** \brief route origin
+   *
+   *  The argument appears in CommandArguments as ndn::nfd::RouteOrigin.
+   */
+  ROUTE_ORIGIN,
 };
 
 std::ostream&

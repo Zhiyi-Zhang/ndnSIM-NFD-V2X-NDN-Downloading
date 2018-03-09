@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,6 +27,9 @@
 #include "manager-common-fixture.hpp"
 
 #include <ndn-cxx/security/key-chain.hpp>
+#include <ndn-cxx/security/pib/identity.hpp>
+#include <ndn-cxx/security/pib/key.hpp>
+#include <ndn-cxx/security/pib/pib.hpp>
 #include <ndn-cxx/mgmt/nfd/control-command.hpp>
 
 namespace nfd {
@@ -54,19 +57,15 @@ public:
 class ManagerTester : public ManagerBase
 {
 public:
-  ManagerTester(Dispatcher& dispatcher,
-                const std::string& module)
-    : ManagerBase(dispatcher, module)
-  {
-  }
+  using ManagerBase::ManagerBase;
 
-  virtual ndn::mgmt::Authorization
+  ndn::mgmt::Authorization
   makeAuthorization(const std::string& verb) override
   {
-    return [this] (const Name& prefix, const Interest& interest,
-                   const ndn::mgmt::ControlParameters* params,
-                   ndn::mgmt::AcceptContinuation accept,
-                   ndn::mgmt::RejectContinuation reject) {
+    return [] (const Name& prefix, const Interest& interest,
+               const ndn::mgmt::ControlParameters* params,
+               ndn::mgmt::AcceptContinuation accept,
+               ndn::mgmt::RejectContinuation reject) {
       accept("requester");
     };
   }
@@ -115,7 +114,7 @@ BOOST_AUTO_TEST_CASE(RegisterStatusDataset)
   m_manager.registerStatusDatasetHandler("test-status", handler);
   setTopPrefix("/localhost/nfd");
 
-  receiveInterest(makeInterest("/localhost/nfd/test-module/test-status"));
+  receiveInterest(Interest("/localhost/nfd/test-module/test-status"));
   BOOST_CHECK(isStatusDatasetCalled);
 }
 
@@ -124,7 +123,8 @@ BOOST_AUTO_TEST_CASE(RegisterNotificationStream)
   auto post = m_manager.registerNotificationStream("test-notification");
   setTopPrefix("/localhost/nfd");
 
-  post(Block("\x82\x01\x02", 3));
+  const uint8_t buf[] = {0x82, 0x01, 0x02};
+  post(Block(buf, sizeof(buf)));
   advanceClocks(time::milliseconds(1));
 
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
@@ -137,15 +137,12 @@ BOOST_AUTO_TEST_CASE(ExtractRequester)
   std::string requesterName;
   auto testAccept = [&] (const std::string& requester) { requesterName = requester; };
 
-  auto unsignedCommand = makeInterest("/test/interest/unsigned");
-  auto signedCommand = makeControlCommandRequest("/test/interest/signed", ControlParameters());
-
-  m_manager.extractRequester(*unsignedCommand, testAccept);
+  m_manager.extractRequester(Interest("/test/interest/unsigned"), testAccept);
   BOOST_CHECK(requesterName.empty());
 
   requesterName = "";
-  m_manager.extractRequester(*signedCommand, testAccept);
-  auto keyLocator = m_keyChain.getDefaultCertificateNameForIdentity(m_identityName).getPrefix(-1);
+  m_manager.extractRequester(makeControlCommandRequest("/test/interest/signed", ControlParameters()), testAccept);
+  auto keyLocator = m_keyChain.getPib().getIdentity(DEFAULT_COMMAND_SIGNER_IDENTITY).getDefaultKey().getName();
   BOOST_CHECK_EQUAL(requesterName, keyLocator.toUri());
 }
 

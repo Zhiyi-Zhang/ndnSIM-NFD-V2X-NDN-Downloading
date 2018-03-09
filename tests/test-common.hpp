@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -135,12 +135,12 @@ signData(shared_ptr<Data> data)
   return data;
 }
 
-/** \brief create a Link object with fake signature
- *  \note Link may be modified afterwards without losing the fake signature.
- *        If a real signature is desired, sign again with KeyChain.
+/** \brief create a Nack
+ *  \param interest Interest
+ *  \param reason Nack reason
  */
-shared_ptr<Link>
-makeLink(const Name& name, std::initializer_list<std::pair<uint32_t, Name>> delegations);
+lp::Nack
+makeNack(Interest interest, lp::NackReason reason);
 
 /** \brief create a Nack
  *  \param name Interest name

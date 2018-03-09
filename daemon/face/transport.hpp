@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -28,6 +28,7 @@
 
 #include "core/counter.hpp"
 #include "face-log.hpp"
+
 #include <ndn-cxx/encoding/nfd-constants.hpp>
 
 namespace nfd {
@@ -40,9 +41,9 @@ class LinkService;
  */
 enum class TransportState {
   NONE,
-  UP, ///< the transport is up
-  DOWN, ///< the transport is down temporarily, and is being recovered
-  CLOSING, ///< the transport is requested to be closed
+  UP, ///< the transport is up and can transmit packets
+  DOWN, ///< the transport is temporarily down, and is being recovered
+  CLOSING, ///< the transport is being closed gracefully, either by the peer or by a call to close()
   FAILED, ///< the transport is being closed due to a failure
   CLOSED ///< the transport is closed, and can be safely deallocated
 };
@@ -97,6 +98,14 @@ const ssize_t MTU_UNLIMITED = -1;
 /** \brief (for internal use) indicates MTU field is unset
  */
 const ssize_t MTU_INVALID = -2;
+
+/** \brief indicates that the transport does not support reading the queue capacity/length
+ */
+const ssize_t QUEUE_UNSUPPORTED = -1;
+
+/** \brief indicates that the transport was unable to retrieve the queue capacity/length
+ */
+const ssize_t QUEUE_ERROR = -2;
 
 /** \brief the lower part of a Face
  *  \sa Face
@@ -221,10 +230,21 @@ public: // static properties
   ndn::nfd::FacePersistency
   getPersistency() const;
 
+  /** \brief check whether the face persistency can be changed to \p newPersistency
+   *
+   *  This function serves as the external API, and invokes the protected function
+   *  canChangePersistencyToImpl to perform further checks if \p newPersistency differs
+   *  from the current persistency.
+   *
+   *  \return true if the change can be performed, false otherwise
+   */
+  bool
+  canChangePersistencyTo(ndn::nfd::FacePersistency newPersistency) const;
+
   /** \brief changes face persistency setting
    */
   void
-  setPersistency(ndn::nfd::FacePersistency persistency);
+  setPersistency(ndn::nfd::FacePersistency newPersistency);
 
   /** \return whether face is point-to-point or multi-access
    */
@@ -243,6 +263,13 @@ public: // static properties
   ssize_t
   getMtu() const;
 
+  /** \return capacity of the send queue (in bytes)
+   *  \retval QUEUE_UNSUPPORTED transport does not support queue capacity retrieval
+   *  \retval QUEUE_ERROR transport was unable to retrieve the queue capacity
+   */
+  ssize_t
+  getSendQueueCapacity() const;
+
 public: // dynamic properties
   /** \return transport state
    */
@@ -258,6 +285,13 @@ public: // dynamic properties
    */
   time::steady_clock::TimePoint
   getExpirationTime() const;
+
+  /** \return current send queue length of the transport (in octets)
+   *  \retval QUEUE_UNSUPPORTED transport does not support queue length retrieval
+   *  \retval QUEUE_ERROR transport was unable to retrieve the queue length
+   */
+  virtual ssize_t
+  getSendQueueLength();
 
 protected: // properties to be set by subclass
   void
@@ -275,6 +309,9 @@ protected: // properties to be set by subclass
   void
   setMtu(ssize_t mtu);
 
+  void
+  setSendQueueCapacity(ssize_t sendQueueCapacity);
+
   /** \brief set transport state
    *
    *  Only the following transitions are valid:
@@ -289,12 +326,23 @@ protected: // properties to be set by subclass
   setExpirationTime(const time::steady_clock::TimePoint& expirationTime);
 
 protected: // to be overridden by subclass
-  /** \brief invoked before persistency is changed
-   *  \throw std::invalid_argument new persistency is not supported
-   *  \throw std::runtime_error transition is disallowed
+  /** \brief invoked by canChangePersistencyTo to perform the check
+   *
+   *  Base class implementation returns false.
+   *
+   *  \param newPersistency the new persistency, guaranteed to be different from current persistency
+   */
+  virtual bool
+  canChangePersistencyToImpl(ndn::nfd::FacePersistency newPersistency) const;
+
+  /** \brief invoked after the persistency has been changed
+   *
+   *  The base class implementation does nothing.
+   *  When overridden in a subclass, the function should update internal states
+   *  after persistency setting has been changed.
    */
   virtual void
-  beforeChangePersistency(ndn::nfd::FacePersistency newPersistency) = 0;
+  afterChangePersistency(ndn::nfd::FacePersistency oldPersistency);
 
   /** \brief performs Transport specific operations to close the transport
    *
@@ -324,6 +372,7 @@ private:
   ndn::nfd::FacePersistency m_persistency;
   ndn::nfd::LinkType m_linkType;
   ssize_t m_mtu;
+  size_t m_sendQueueCapacity;
   TransportState m_state;
   time::steady_clock::TimePoint m_expirationTime;
 };
@@ -417,6 +466,18 @@ Transport::setMtu(ssize_t mtu)
 {
   BOOST_ASSERT(mtu == MTU_UNLIMITED || mtu > 0);
   m_mtu = mtu;
+}
+
+inline ssize_t
+Transport::getSendQueueCapacity() const
+{
+  return m_sendQueueCapacity;
+}
+
+inline void
+Transport::setSendQueueCapacity(ssize_t sendQueueCapacity)
+{
+  m_sendQueueCapacity = sendQueueCapacity;
 }
 
 inline TransportState

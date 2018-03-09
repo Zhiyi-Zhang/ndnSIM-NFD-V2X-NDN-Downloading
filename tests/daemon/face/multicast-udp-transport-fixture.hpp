@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -30,7 +30,6 @@
 #include "face/face.hpp"
 
 #include "dummy-receive-link-service.hpp"
-#include "test-ip.hpp"
 #include "tests/limited-io.hpp"
 
 namespace nfd {
@@ -46,8 +45,7 @@ class MulticastUdpTransportFixture : public BaseFixture
 protected:
   MulticastUdpTransportFixture()
     : transport(nullptr)
-    , multicastEp(ip::address::from_string("230.15.19.47"), 7070)
-    , defaultAddr(getTestIp<ip::address_v4>(LoopbackAddress::No, MulticastInterface::Yes))
+    , txPort(7001)
     , receivedPackets(nullptr)
     , remoteSockRx(g_io)
     , remoteSockTx(g_io)
@@ -55,36 +53,38 @@ protected:
   }
 
   void
-  initialize(ip::address_v4 address)
+  initialize(ip::address address)
   {
-    openMulticastSockets(remoteSockRx, remoteSockTx, multicastEp.port());
+    ip::address mcastAddr;
+    if (address.is_v4()) {
+      // the administratively scoped group 224.0.0.254 is reserved for experimentation (RFC 4727)
+      mcastAddr = ip::address_v4(0xE00000FE);
+    }
+    else {
+      // the group FF0X::114 is reserved for experimentation at all scope levels (RFC 4727)
+      auto v6Addr = ip::address_v6::from_string("FF01::114");
+      v6Addr.scope_id(address.to_v6().scope_id());
+      mcastAddr = v6Addr;
+    }
+    mcastEp = udp::endpoint(mcastAddr, 7373);
+    remoteMcastEp = udp::endpoint(mcastAddr, 8383);
+
+    MulticastUdpTransport::openRxSocket(remoteSockRx, mcastEp, address);
+    MulticastUdpTransport::openTxSocket(remoteSockTx, udp::endpoint(address, 0), nullptr, true);
 
     udp::socket sockRx(g_io);
     udp::socket sockTx(g_io);
-    localEp = udp::endpoint(address, 7001);
-    openMulticastSockets(sockRx, sockTx, localEp.port());
+    MulticastUdpTransport::openRxSocket(sockRx, remoteMcastEp, address);
+    MulticastUdpTransport::openTxSocket(sockTx, udp::endpoint(address, txPort), nullptr, true);
 
     face = make_unique<Face>(
              make_unique<DummyReceiveLinkService>(),
-             make_unique<MulticastUdpTransport>(localEp, multicastEp, std::move(sockRx), std::move(sockTx)));
+             make_unique<MulticastUdpTransport>(mcastEp, std::move(sockRx), std::move(sockTx),
+                                                ndn::nfd::LINK_TYPE_MULTI_ACCESS));
     transport = static_cast<MulticastUdpTransport*>(face->getTransport());
     receivedPackets = &static_cast<DummyReceiveLinkService*>(face->getLinkService())->receivedPackets;
 
     BOOST_REQUIRE_EQUAL(transport->getState(), TransportState::UP);
-  }
-
-  void
-  openMulticastSockets(udp::socket& rx, udp::socket& tx, uint16_t port)
-  {
-    rx.open(udp::v4());
-    rx.set_option(udp::socket::reuse_address(true));
-    rx.bind(udp::endpoint(multicastEp.address(), port));
-    rx.set_option(ip::multicast::join_group(multicastEp.address()));
-
-    tx.open(udp::v4());
-    tx.set_option(udp::socket::reuse_address(true));
-    tx.set_option(ip::multicast::enable_loopback(true));
-    tx.bind(udp::endpoint(ip::address_v4::any(), port));
   }
 
   void
@@ -103,25 +103,31 @@ protected:
   void
   remoteWrite(const std::vector<uint8_t>& buf, bool needToCheck = true)
   {
-    remoteSockTx.async_send_to(boost::asio::buffer(buf), udp::endpoint(multicastEp.address(), 7001),
+    sendToGroup(remoteSockTx, buf, needToCheck);
+    limitedIo.defer(time::seconds(1));
+  }
+
+  void
+  sendToGroup(udp::socket& sock, const std::vector<uint8_t>& buf, bool needToCheck = true) const
+  {
+    sock.async_send_to(boost::asio::buffer(buf), remoteMcastEp,
       [needToCheck] (const boost::system::error_code& error, size_t) {
         if (needToCheck) {
           BOOST_REQUIRE_EQUAL(error, boost::system::errc::success);
         }
       });
-    limitedIo.defer(time::seconds(1));
   }
 
 protected:
   LimitedIo limitedIo;
   MulticastUdpTransport* transport;
-  udp::endpoint localEp;
-  udp::endpoint multicastEp;
-  const ip::address_v4 defaultAddr;
+  udp::endpoint mcastEp;
+  uint16_t txPort;
   std::vector<Transport::Packet>* receivedPackets;
 
 private:
   unique_ptr<Face> face;
+  udp::endpoint remoteMcastEp;
   udp::socket remoteSockRx;
   udp::socket remoteSockTx;
 };

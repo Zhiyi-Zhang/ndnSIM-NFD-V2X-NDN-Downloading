@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,14 +27,17 @@
 #define NFD_TOOLS_NFDC_STATUS_REPORT_HPP
 
 #include "module.hpp"
+#include <ndn-cxx/face.hpp>
+#include <ndn-cxx/security/key-chain.hpp>
+#include <ndn-cxx/security/v2/validator.hpp>
 
 namespace nfd {
 namespace tools {
 namespace nfdc {
 
 using ndn::Face;
-using ndn::security::KeyChain;
-using ndn::Validator;
+using ndn::KeyChain;
+using ndn::security::v2::Validator;
 
 enum class ReportFormat {
   XML = 1,

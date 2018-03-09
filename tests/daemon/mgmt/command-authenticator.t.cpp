@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,16 +24,16 @@
  */
 
 #include "mgmt/command-authenticator.hpp"
-#include <ndn-cxx/security/signing-helpers.hpp>
-#include <boost/filesystem.hpp>
 
 #include "tests/test-common.hpp"
-#include "tests/identity-management-fixture.hpp"
+#include "tests/manager-common-fixture.hpp"
+
+#include <boost/filesystem.hpp>
 
 namespace nfd {
 namespace tests {
 
-class CommandAuthenticatorFixture : public IdentityManagementTimeFixture
+class CommandAuthenticatorFixture : public CommandInterestSignerFixture
 {
 protected:
   CommandAuthenticatorFixture()
@@ -52,8 +52,7 @@ protected:
   void
   loadConfig(const std::string& config)
   {
-    boost::filesystem::path configPath = boost::filesystem::current_path() /=
-                                         "command-authenticator-test.conf";
+    auto configPath = boost::filesystem::current_path() / "command-authenticator-test.conf";
     ConfigFile cf;
     authenticator->setConfigFile(cf);
     cf.parse(config, false, configPath.c_str());
@@ -63,17 +62,17 @@ protected:
   authorize(const std::string& module, const Name& identity,
             const function<void(Interest&)>& modifyInterest = nullptr)
   {
-    auto interest = makeInterest(Name("/prefix").append(module).append("verb"));
-    m_keyChain.sign(*interest, signingByIdentity(identity));
+    Interest interest = this->makeControlCommandRequest(Name("/prefix/" + module + "/verb"),
+                                                        ControlParameters(), identity);
     if (modifyInterest != nullptr) {
-      modifyInterest(*interest);
+      modifyInterest(interest);
     }
 
     ndn::mgmt::Authorization authorization = authorizations.at(module);
 
     bool isAccepted = false;
     bool isRejected = false;
-    authorization(Name("/prefix"), *interest, nullptr,
+    authorization(Name("/prefix"), interest, nullptr,
       [this, &isAccepted, &isRejected] (const std::string& requester) {
         BOOST_REQUIRE_MESSAGE(!isAccepted && !isRejected,
                               "authorization function should invoke only one continuation");
@@ -87,7 +86,7 @@ protected:
         lastRejectReply = act;
       });
 
-    this->advanceClocks(time::milliseconds(1), 10);
+    this->advanceClocks(1_ms, 10);
     BOOST_REQUIRE_MESSAGE(isAccepted || isRejected,
                           "authorization function should invoke one continuation");
     return isAccepted;
@@ -298,7 +297,7 @@ BOOST_AUTO_TEST_CASE(BadKeyLocator_MissingKeyLocator)
 {
   BOOST_CHECK_EQUAL(authorize1(
     [] (Interest& interest) {
-      ndn::SignatureInfo sigInfo;
+      ndn::SignatureInfo sigInfo(tlv::SignatureSha256WithRsa);
       setNameComponent(interest, ndn::signed_interest::POS_SIG_INFO,
                        sigInfo.wireEncode().begin(), sigInfo.wireEncode().end());
     }
@@ -312,22 +311,7 @@ BOOST_AUTO_TEST_CASE(BadKeyLocator_BadKeyLocatorType)
     [] (Interest& interest) {
       ndn::KeyLocator kl;
       kl.setKeyDigest(ndn::encoding::makeBinaryBlock(tlv::KeyDigest, "\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD", 8));
-      ndn::SignatureInfo sigInfo;
-      sigInfo.setKeyLocator(kl);
-      setNameComponent(interest, ndn::signed_interest::POS_SIG_INFO,
-                       sigInfo.wireEncode().begin(), sigInfo.wireEncode().end());
-    }
-  ), false);
-  BOOST_CHECK(lastRejectReply == ndn::mgmt::RejectReply::SILENT);
-}
-
-BOOST_AUTO_TEST_CASE(BadKeyLocator_BadCertName)
-{
-  BOOST_CHECK_EQUAL(authorize1(
-    [] (Interest& interest) {
-      ndn::KeyLocator kl;
-      kl.setName("/bad/cert/name");
-      ndn::SignatureInfo sigInfo;
+      ndn::SignatureInfo sigInfo(tlv::SignatureSha256WithRsa);
       sigInfo.setKeyLocator(kl);
       setNameComponent(interest, ndn::signed_interest::POS_SIG_INFO,
                        sigInfo.wireEncode().begin(), sigInfo.wireEncode().end());
@@ -349,7 +333,7 @@ BOOST_AUTO_TEST_CASE(BadSig)
 {
   BOOST_CHECK_EQUAL(authorize1(
     [] (Interest& interest) {
-      setNameComponent(interest, ndn::signed_interest::POS_SIG_VALUE, "bad-signature-bits");
+      setNameComponent(interest, ndn::command_interest::POS_SIG_VALUE, "bad-signature-bits");
     }
   ), false);
   BOOST_CHECK(lastRejectReply == ndn::mgmt::RejectReply::STATUS403);
@@ -360,14 +344,26 @@ BOOST_AUTO_TEST_CASE(InvalidTimestamp)
   name::Component timestampComp;
   BOOST_CHECK_EQUAL(authorize1(
     [&timestampComp] (const Interest& interest) {
-      timestampComp = interest.getName().at(ndn::signed_interest::POS_TIMESTAMP);
+      timestampComp = interest.getName().at(ndn::command_interest::POS_TIMESTAMP);
     }
   ), true); // accept first command
   BOOST_CHECK_EQUAL(authorize1(
     [&timestampComp] (Interest& interest) {
-      setNameComponent(interest, ndn::signed_interest::POS_TIMESTAMP, timestampComp);
+      setNameComponent(interest, ndn::command_interest::POS_TIMESTAMP, timestampComp);
     }
   ), false); // reject second command because timestamp equals first command
+  BOOST_CHECK(lastRejectReply == ndn::mgmt::RejectReply::STATUS403);
+}
+
+BOOST_FIXTURE_TEST_CASE(MissingAuthorizationsSection, CommandAuthenticatorFixture)
+{
+  Name id0("/localhost/CommandAuthenticator/0");
+  BOOST_REQUIRE(addIdentity(id0));
+
+  makeModules({"module42"});
+  loadConfig("");
+
+  BOOST_CHECK_EQUAL(authorize("module42", id0), false);
   BOOST_CHECK(lastRejectReply == ndn::mgmt::RejectReply::STATUS403);
 }
 

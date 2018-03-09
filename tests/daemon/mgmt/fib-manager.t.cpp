@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -35,6 +35,8 @@
 namespace nfd {
 namespace tests {
 
+using ndn::nullopt;
+
 class FibManagerFixture : public NfdManagerCommonFixture
 {
 public:
@@ -48,13 +50,13 @@ public:
   }
 
 public: // for test
-  ControlParameters
+  static ControlParameters
   makeParameters(const Name& name, const FaceId& id)
   {
     return ControlParameters().setName(name).setFaceId(id);
   }
 
-  ControlParameters
+  static ControlParameters
   makeParameters(const Name& name, const FaceId& id, const uint32_t& cost)
   {
     return ControlParameters().setName(name).setFaceId(id).setCost(cost);
@@ -78,14 +80,14 @@ public: // for check
     WRONG_N_NEXTHOPS,
     NO_NEXTHOP,
     WRONG_COST
-   };
+  };
 
   /**
    * @brief check whether the nexthop record is added / removed properly
    *
-   * @param expectedNNextHops use -1 to skip this check
-   * @param faceId use face::FACEID_NULL to skip NextHopRecord checks
-   * @param expectedCost use -1 to skip this check
+   * @param expectedNNextHops use nullopt to skip this check
+   * @param faceId use nullopt to skip NextHopRecord checks
+   * @param expectedCost use nullopt to skip this check
    *
    * @retval OK FIB entry is found by exact match and has the expected number of nexthops;
    *            NextHopRe record for faceId is found and has the expected cost
@@ -95,23 +97,25 @@ public: // for check
    * @retval WRONG_COST NextHopRecord for faceId has wrong cost
    */
   CheckNextHopResult
-  checkNextHop(const Name& prefix, ssize_t expectedNNextHops = -1,
-               FaceId faceId = face::FACEID_NULL, int32_t expectedCost = -1)
+  checkNextHop(const Name& prefix,
+               ndn::optional<size_t> expectedNNextHops = nullopt,
+               ndn::optional<FaceId> faceId = nullopt,
+               ndn::optional<uint64_t> expectedCost = nullopt) const
   {
     const fib::Entry* entry = m_fib.findExactMatch(prefix);
     if (entry == nullptr) {
       return CheckNextHopResult::NO_FIB_ENTRY;
     }
 
-    const fib::NextHopList& nextHops = entry->getNextHops();
-    if (expectedNNextHops != -1 && nextHops.size() != static_cast<size_t>(expectedNNextHops)) {
+    const auto& nextHops = entry->getNextHops();
+    if (expectedNNextHops && nextHops.size() != *expectedNNextHops) {
       return CheckNextHopResult::WRONG_N_NEXTHOPS;
     }
 
-    if (faceId != face::FACEID_NULL) {
+    if (faceId) {
       for (const auto& record : nextHops) {
-        if (record.getFace().getId() == faceId) {
-          if (expectedCost != -1 && record.getCost() != static_cast<uint32_t>(expectedCost))
+        if (record.getFace().getId() == *faceId) {
+          if (expectedCost && record.getCost() != *expectedCost)
             return CheckNextHopResult::WRONG_COST;
           else
             return CheckNextHopResult::OK;
@@ -129,29 +133,22 @@ protected:
 };
 
 std::ostream&
-operator<<(std::ostream &os, const FibManagerFixture::CheckNextHopResult& result)
+operator<<(std::ostream& os, FibManagerFixture::CheckNextHopResult result)
 {
   switch (result) {
   case FibManagerFixture::CheckNextHopResult::OK:
-    os << "OK";
-    break;
+    return os << "OK";
   case FibManagerFixture::CheckNextHopResult::NO_FIB_ENTRY:
-    os << "NO_FIB_ENTRY";
-    break;
+    return os << "NO_FIB_ENTRY";
   case FibManagerFixture::CheckNextHopResult::WRONG_N_NEXTHOPS:
-    os << "WRONG_N_NEXTHOPS";
-    break;
+    return os << "WRONG_N_NEXTHOPS";
   case FibManagerFixture::CheckNextHopResult::NO_NEXTHOP:
-    os << "NO_NEXTHOP";
-    break;
+    return os << "NO_NEXTHOP";
   case FibManagerFixture::CheckNextHopResult::WRONG_COST:
-    os << "WRONG_COST";
-    break;
-  default:
-    break;
+    return os << "WRONG_COST";
   };
 
-  return os;
+  return os << static_cast<int>(result);
 }
 
 BOOST_AUTO_TEST_SUITE(Mgmt)
@@ -161,17 +158,35 @@ BOOST_AUTO_TEST_SUITE(AddNextHop)
 
 BOOST_AUTO_TEST_CASE(UnknownFaceId)
 {
-  auto command = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop",
-                                           makeParameters("hello", face::FACEID_NULL, 101));
-  receiveInterest(command);
+  auto req = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop",
+                                       makeParameters("hello", face::FACEID_NULL, 101));
+  receiveInterest(req);
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
 
   // check response
-  BOOST_CHECK_EQUAL(checkResponse(0, command->getName(), ControlResponse(410, "Face not found")),
+  BOOST_CHECK_EQUAL(checkResponse(0, req.getName(), ControlResponse(410, "Face not found")),
                     CheckResponseResult::OK);
 
   // double check that the next hop was not added
-  BOOST_CHECK_EQUAL(checkNextHop("/hello", -1, face::FACEID_NULL, 101), CheckNextHopResult::NO_FIB_ENTRY);
+  BOOST_CHECK_EQUAL(checkNextHop("/hello", nullopt, nullopt, 101), CheckNextHopResult::NO_FIB_ENTRY);
+}
+
+BOOST_AUTO_TEST_CASE(NameTooLong)
+{
+  Name prefix;
+  while (prefix.size() <= FIB_MAX_DEPTH) {
+    prefix.append("A");
+  }
+
+  auto req = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop",
+                                       makeParameters(prefix, addFace()));
+  receiveInterest(req);
+
+  ControlResponse expected(414, "FIB entry prefix cannot exceed " +
+                                ndn::to_string(Fib::getMaxDepth()) + " components");
+  BOOST_CHECK_EQUAL(checkResponse(0, req.getName(), expected), CheckResponseResult::OK);
+
+  BOOST_CHECK_EQUAL(checkNextHop(prefix), CheckNextHopResult::NO_FIB_ENTRY);
 }
 
 BOOST_AUTO_TEST_CASE(ImplicitFaceId)
@@ -184,14 +199,12 @@ BOOST_AUTO_TEST_CASE(ImplicitFaceId)
   Name expectedName;
   ControlResponse expectedResponse;
   auto testAddNextHop = [&] (ControlParameters parameters, const FaceId& faceId) {
-    auto command = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", parameters,
-                   [&faceId] (shared_ptr<Interest> interest) {
-                     interest->setTag(make_shared<lp::IncomingFaceIdTag>(faceId));
-                   });
+    auto req = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", parameters);
+    req.setTag(make_shared<lp::IncomingFaceIdTag>(faceId));
     m_responses.clear();
-    expectedName = command->getName();
+    expectedName = req.getName();
     expectedResponse = makeResponse(200, "Success", parameters.setFaceId(faceId));
-    receiveInterest(command);
+    receiveInterest(req);
   };
 
   testAddNextHop(ControlParameters().setName("/hello").setCost(100).setFaceId(0), face1);
@@ -211,11 +224,11 @@ BOOST_AUTO_TEST_CASE(InitialAdd)
   BOOST_REQUIRE_NE(addedFaceId, face::INVALID_FACEID);
 
   auto parameters = makeParameters("hello", addedFaceId, 101);
-  auto command = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", parameters);
+  auto req = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", parameters);
+  receiveInterest(req);
 
-  receiveInterest(command);
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
-  BOOST_CHECK_EQUAL(checkResponse(0, command->getName(), makeResponse(200, "Success", parameters)),
+  BOOST_CHECK_EQUAL(checkResponse(0, req.getName(), makeResponse(200, "Success", parameters)),
                     CheckResponseResult::OK);
   BOOST_CHECK_EQUAL(checkNextHop("/hello", 1, addedFaceId, 101), CheckNextHopResult::OK);
 }
@@ -227,11 +240,11 @@ BOOST_AUTO_TEST_CASE(ImplicitCost)
 
   auto originalParameters = ControlParameters().setName("/hello").setFaceId(addedFaceId);
   auto parameters = makeParameters("/hello", addedFaceId, 0);
-  auto command = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", originalParameters);
+  auto req = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", originalParameters);
+  receiveInterest(req);
 
-  receiveInterest(command);
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
-  BOOST_CHECK_EQUAL(checkResponse(0, command->getName(), makeResponse(200, "Success", parameters)),
+  BOOST_CHECK_EQUAL(checkResponse(0, req.getName(), makeResponse(200, "Success", parameters)),
                     CheckResponseResult::OK);
   BOOST_CHECK_EQUAL(checkNextHop("/hello", 1, addedFaceId, 0), CheckNextHopResult::OK);
 }
@@ -245,10 +258,10 @@ BOOST_AUTO_TEST_CASE(AddToExisting)
   ControlResponse expectedResponse;
   auto testAddNextHop = [&] (const ControlParameters& parameters) {
     m_responses.clear();
-    auto command = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", parameters);
-    expectedName = command->getName();
+    auto req = makeControlCommandRequest("/localhost/nfd/fib/add-nexthop", parameters);
+    expectedName = req.getName();
     expectedResponse = makeResponse(200, "Success", parameters);
-    receiveInterest(command);
+    receiveInterest(req);
   };
 
   // add initial, succeeds
@@ -276,10 +289,10 @@ BOOST_AUTO_TEST_CASE(Basic)
   ControlResponse expectedResponse;
   auto testRemoveNextHop = [&] (const ControlParameters& parameters) {
     m_responses.clear();
-    auto command = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
-    expectedName = command->getName();
+    auto req = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
+    expectedName = req.getName();
     expectedResponse = makeResponse(200, "Success", parameters);
-    receiveInterest(command);
+    receiveInterest(req);
   };
 
   FaceId face1 = addFace();
@@ -316,12 +329,12 @@ BOOST_AUTO_TEST_CASE(PrefixNotFound)
   BOOST_REQUIRE_NE(addedFaceId, face::INVALID_FACEID);
 
   auto parameters = makeParameters("hello", addedFaceId);
-  auto command = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
-  auto response = makeResponse(200, "Success", parameters);
-
-  receiveInterest(command);
+  auto req = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
+  receiveInterest(req);
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
-  BOOST_CHECK_EQUAL(checkResponse(0, command->getName(), response), CheckResponseResult::OK);
+
+  auto expectedResponse = makeResponse(200, "Success", parameters);
+  BOOST_CHECK_EQUAL(checkResponse(0, req.getName(), expectedResponse), CheckResponseResult::OK);
 }
 
 BOOST_AUTO_TEST_CASE(ImplicitFaceId)
@@ -335,13 +348,11 @@ BOOST_AUTO_TEST_CASE(ImplicitFaceId)
   ControlResponse expectedResponse;
   auto testWithImplicitFaceId = [&] (ControlParameters parameters, FaceId face) {
     m_responses.clear();
-    auto command = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters,
-                   [face] (shared_ptr<Interest> interest) {
-                     interest->setTag(make_shared<lp::IncomingFaceIdTag>(face));
-                   });
-    expectedName = command->getName();
+    auto req = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
+    req.setTag(make_shared<lp::IncomingFaceIdTag>(face));
+    expectedName = req.getName();
     expectedResponse = makeResponse(200, "Success", parameters.setFaceId(face));
-    receiveInterest(command);
+    receiveInterest(req);
   };
 
   fib::Entry* entry = m_fib.insert("/hello").first;
@@ -370,10 +381,10 @@ BOOST_AUTO_TEST_CASE(RecordNotExist)
   ControlResponse expectedResponse;
   auto testRemoveNextHop = [&] (ControlParameters parameters) {
     m_responses.clear();
-    auto command = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
-    expectedName = command->getName();
+    auto req = makeControlCommandRequest("/localhost/nfd/fib/remove-nexthop", parameters);
+    expectedName = req.getName();
     expectedResponse = makeResponse(200, "Success", parameters);
-    receiveInterest(command);
+    receiveInterest(req);
   };
 
   m_fib.insert("/hello").first->addNextHop(*m_faceTable.get(face1), 101);
@@ -381,69 +392,17 @@ BOOST_AUTO_TEST_CASE(RecordNotExist)
   testRemoveNextHop(makeParameters("/hello", face2 + 100));
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1); // face does not exist
   BOOST_CHECK_EQUAL(checkResponse(0, expectedName, expectedResponse), CheckResponseResult::OK);
-  BOOST_CHECK_EQUAL(checkNextHop("/hello", -1, face2 + 100), CheckNextHopResult::NO_NEXTHOP);
+  BOOST_CHECK_EQUAL(checkNextHop("/hello", nullopt, face2 + 100), CheckNextHopResult::NO_NEXTHOP);
 
   testRemoveNextHop(makeParameters("/hello", face2));
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1); // record does not exist
   BOOST_CHECK_EQUAL(checkResponse(0, expectedName, expectedResponse), CheckResponseResult::OK);
-  BOOST_CHECK_EQUAL(checkNextHop("/hello", -1, face2), CheckNextHopResult::NO_NEXTHOP);
+  BOOST_CHECK_EQUAL(checkNextHop("/hello", nullopt, face2), CheckNextHopResult::NO_NEXTHOP);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // RemoveNextHop
 
 BOOST_AUTO_TEST_SUITE(List)
-
-// @todo Remove when ndn::nfd::FibEntry implements operator!= and operator<<
-class FibEntry : public ndn::nfd::FibEntry
-{
-public:
-  FibEntry() = default;
-
-  FibEntry(const ndn::nfd::FibEntry& entry)
-    : ndn::nfd::FibEntry(entry)
-  {
-  }
-};
-
-bool
-operator!=(const FibEntry& left, const FibEntry& right)
-{
-  if (left.getPrefix() != right.getPrefix()) {
-    return true;
-  }
-
-  const auto& leftNextHops = left.getNextHopRecords();
-  const auto& rightNextHops = right.getNextHopRecords();
-  if (leftNextHops.size() != rightNextHops.size()) {
-    return true;
-  }
-
-  for (const auto& nexthop : leftNextHops) {
-    auto hitEntry = std::find_if(rightNextHops.begin(), rightNextHops.end(),
-      [&] (const ndn::nfd::NextHopRecord& record) {
-        return nexthop.getCost() == record.getCost() && nexthop.getFaceId() == record.getFaceId();
-      });
-
-    if (hitEntry == rightNextHops.end()) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-std::ostream&
-operator<<(std::ostream &os, const FibEntry& entry)
-{
-  const auto& nexthops = entry.getNextHopRecords();
-  os << "[" << entry.getPrefix() << ", " << nexthops.size() << ": ";
-  for (auto record : nexthops) {
-    os << "{" << record.getFaceId() << ", " << record.getCost() << "} ";
-  }
-  os << "]";
-
-  return os;
-}
 
 BOOST_AUTO_TEST_CASE(FibDataset)
 {
@@ -457,36 +416,28 @@ BOOST_AUTO_TEST_CASE(FibDataset)
     fibEntry->addNextHop(*m_faceTable.get(addFace()), std::numeric_limits<uint8_t>::max() - 2);
   }
 
-  receiveInterest(makeInterest("/localhost/nfd/fib/list"));
+  receiveInterest(Interest("/localhost/nfd/fib/list"));
 
-  Block content;
-  BOOST_CHECK_NO_THROW(content = concatenateResponses());
-  BOOST_CHECK_NO_THROW(content.parse());
+  Block content = concatenateResponses();
+  content.parse();
   BOOST_REQUIRE_EQUAL(content.elements().size(), nEntries);
 
-  std::vector<FibEntry> receivedRecords, expectedRecords;
+  std::vector<ndn::nfd::FibEntry> receivedRecords, expectedRecords;
   for (size_t idx = 0; idx < nEntries; ++idx) {
-    BOOST_TEST_MESSAGE("processing element: " << idx);
-
-    FibEntry decodedEntry;
-    BOOST_REQUIRE_NO_THROW(decodedEntry.wireDecode(content.elements()[idx]));
+    ndn::nfd::FibEntry decodedEntry(content.elements()[idx]);
     receivedRecords.push_back(decodedEntry);
-
     actualPrefixes.erase(decodedEntry.getPrefix());
 
     auto matchedEntry = m_fib.findExactMatch(decodedEntry.getPrefix());
     BOOST_REQUIRE(matchedEntry != nullptr);
 
-    FibEntry record;
-    record.setPrefix(matchedEntry->getPrefix());
-    const auto& nextHops = matchedEntry->getNextHops();
-    for (const auto& next : nextHops) {
-      ndn::nfd::NextHopRecord nextHopRecord;
-      nextHopRecord.setFaceId(next.getFace().getId());
-      nextHopRecord.setCost(next.getCost());
-      record.addNextHopRecord(nextHopRecord);
+    expectedRecords.emplace_back();
+    expectedRecords.back().setPrefix(matchedEntry->getPrefix());
+    for (const auto& nh : matchedEntry->getNextHops()) {
+      expectedRecords.back().addNextHopRecord(ndn::nfd::NextHopRecord()
+                                              .setFaceId(nh.getFace().getId())
+                                              .setCost(nh.getCost()));
     }
-    expectedRecords.push_back(record);
   }
 
   BOOST_CHECK_EQUAL(actualPrefixes.size(), 0);

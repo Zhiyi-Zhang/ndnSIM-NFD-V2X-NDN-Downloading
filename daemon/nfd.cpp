@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,18 +25,20 @@
 
 #include "nfd.hpp"
 
+#include "core/config-file.hpp"
 #include "core/global-io.hpp"
 #include "core/logger-factory.hpp"
 #include "core/privilege-helper.hpp"
-#include "core/config-file.hpp"
-#include "fw/forwarder.hpp"
-#include "face/null-face.hpp"
+#include "face/face-system.hpp"
 #include "face/internal-face.hpp"
-#include "mgmt/fib-manager.hpp"
+#include "face/null-face.hpp"
+#include "fw/forwarder.hpp"
+#include "mgmt/cs-manager.hpp"
 #include "mgmt/face-manager.hpp"
-#include "mgmt/strategy-choice-manager.hpp"
+#include "mgmt/fib-manager.hpp"
 #include "mgmt/forwarder-status-manager.hpp"
 #include "mgmt/general-config-section.hpp"
+#include "mgmt/strategy-choice-manager.hpp"
 #include "mgmt/tables-config-section.hpp"
 
 namespace nfd {
@@ -45,30 +47,22 @@ NFD_LOG_INIT("Nfd");
 
 static const std::string INTERNAL_CONFIG = "internal://nfd.conf";
 
-static inline ndn::util::NetworkMonitor*
-makeNetworkMonitor()
+Nfd::Nfd(ndn::KeyChain& keyChain)
+  : m_keyChain(keyChain)
+  , m_netmon(make_shared<ndn::net::NetworkMonitor>(getGlobalIoService()))
 {
-  try {
-    return new ndn::util::NetworkMonitor(getGlobalIoService());
-  }
-  catch (const ndn::util::NetworkMonitor::Error& e) {
-    NFD_LOG_WARN(e.what());
-    return nullptr;
-  }
 }
 
 Nfd::Nfd(const std::string& configFile, ndn::KeyChain& keyChain)
-  : m_configFile(configFile)
-  , m_keyChain(keyChain)
-  , m_networkMonitor(makeNetworkMonitor())
+  : Nfd(keyChain)
 {
+  m_configFile = configFile;
 }
 
 Nfd::Nfd(const ConfigSection& config, ndn::KeyChain& keyChain)
-  : m_configSection(config)
-  , m_keyChain(keyChain)
-  , m_networkMonitor(makeNetworkMonitor())
+  : Nfd(keyChain)
 {
+  m_configSection = config;
 }
 
 // It is necessary to explicitly define the destructor, because some member variables (e.g.,
@@ -83,25 +77,24 @@ Nfd::initialize()
 
   m_forwarder.reset(new Forwarder());
 
-  initializeManagement();
-
   FaceTable& faceTable = m_forwarder->getFaceTable();
   faceTable.addReserved(face::makeNullFace(), face::FACEID_NULL);
   faceTable.addReserved(face::makeNullFace(FaceUri("contentstore://")), face::FACEID_CONTENT_STORE);
+  m_faceSystem = make_unique<face::FaceSystem>(faceTable, m_netmon);
+
+  initializeManagement();
 
   PrivilegeHelper::drop();
 
-  if (m_networkMonitor) {
-    m_networkMonitor->onNetworkStateChanged.connect([this] {
-        // delay stages, so if multiple events are triggered in short sequence,
-        // only one auto-detection procedure is triggered
-        m_reloadConfigEvent = scheduler::schedule(time::seconds(5),
-          [this] {
-            NFD_LOG_INFO("Network change detected, reloading face section of the config file...");
-            this->reloadConfigFileFaceSection();
-          });
-      });
-  }
+  m_netmon->onNetworkStateChanged.connect([this] {
+      // delay stages, so if multiple events are triggered in short sequence,
+      // only one auto-detection procedure is triggered
+      m_reloadConfigEvent = scheduler::schedule(time::seconds(5),
+        [this] {
+          NFD_LOG_INFO("Network change detected, reloading face section of the config file...");
+          this->reloadConfigFileFaceSection();
+        });
+    });
 }
 
 void
@@ -145,10 +138,11 @@ Nfd::initializeManagement()
   m_authenticator = CommandAuthenticator::create();
 
   m_forwarderStatusManager.reset(new ForwarderStatusManager(*m_forwarder, *m_dispatcher));
-  m_faceManager.reset(new FaceManager(m_forwarder->getFaceTable(),
-                                      *m_dispatcher, *m_authenticator));
+  m_faceManager.reset(new FaceManager(*m_faceSystem, *m_dispatcher, *m_authenticator));
   m_fibManager.reset(new FibManager(m_forwarder->getFib(), m_forwarder->getFaceTable(),
                                     *m_dispatcher, *m_authenticator));
+  m_csManager.reset(new CsManager(m_forwarder->getCs(), m_forwarder->getCounters(),
+                                  *m_dispatcher, *m_authenticator));
   m_strategyChoiceManager.reset(new StrategyChoiceManager(m_forwarder->getStrategyChoice(),
                                                           *m_dispatcher, *m_authenticator));
 

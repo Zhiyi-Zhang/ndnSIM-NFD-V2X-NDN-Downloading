@@ -37,20 +37,21 @@ namespace tests {
 
 using namespace nfd::tests;
 
+typedef StrategyTester<NccStrategy> NccStrategyTester;
+NFD_REGISTER_STRATEGY(NccStrategyTester);
+
 BOOST_AUTO_TEST_SUITE(Fw)
 BOOST_FIXTURE_TEST_SUITE(TestNccStrategy, UnitTestTimeFixture)
 
-using fw::NccStrategy;
-
-// NccStrategy is fairly complex.
-// The most important property is:
-// it remembers which upstream is the fastest to return Data,
-// and favors this upstream in subsequent Interests.
 BOOST_AUTO_TEST_CASE(FavorRespondingUpstream)
 {
+  // NccStrategy is fairly complex.
+  // The most important property is: it remembers which upstream is the fastest to return Data,
+  // and favors this upstream in subsequent Interests.
+
   LimitedIo limitedIo(this);
   Forwarder forwarder;
-  StrategyTester<NccStrategy>& strategy = choose<StrategyTester<NccStrategy>>(forwarder);
+  NccStrategyTester& strategy = choose<NccStrategyTester>(forwarder);
   strategy.afterAction.connect(bind(&LimitedIo::afterOp, &limitedIo));
 
   shared_ptr<DummyFace> face1 = make_shared<DummyFace>();
@@ -110,7 +111,7 @@ BOOST_AUTO_TEST_CASE(FavorRespondingUpstream)
 BOOST_AUTO_TEST_CASE(Bug1853)
 {
   Forwarder forwarder;
-  StrategyTester<NccStrategy>& strategy = choose<StrategyTester<NccStrategy>>(forwarder);
+  NccStrategyTester& strategy = choose<NccStrategyTester>(forwarder);
 
   shared_ptr<DummyFace> face1 = make_shared<DummyFace>();
   shared_ptr<DummyFace> face2 = make_shared<DummyFace>();
@@ -160,7 +161,7 @@ BOOST_AUTO_TEST_CASE(Bug1961)
 {
   LimitedIo limitedIo(this);
   Forwarder forwarder;
-  StrategyTester<NccStrategy>& strategy = choose<StrategyTester<NccStrategy>>(forwarder);
+  NccStrategyTester& strategy = choose<NccStrategyTester>(forwarder);
   strategy.afterAction.connect(bind(&LimitedIo::afterOp, &limitedIo));
 
   shared_ptr<DummyFace> face1 = make_shared<DummyFace>();
@@ -217,7 +218,7 @@ BOOST_AUTO_TEST_CASE(Bug1971)
 {
   LimitedIo limitedIo(this);
   Forwarder forwarder;
-  StrategyTester<NccStrategy>& strategy = choose<StrategyTester<NccStrategy>>(forwarder);
+  NccStrategyTester& strategy = choose<NccStrategyTester>(forwarder);
   strategy.afterAction.connect(bind(&LimitedIo::afterOp, &limitedIo));
 
   shared_ptr<DummyFace> face1 = make_shared<DummyFace>();
@@ -263,7 +264,7 @@ BOOST_AUTO_TEST_CASE(Bug1971)
 BOOST_AUTO_TEST_CASE(Bug1998)
 {
   Forwarder forwarder;
-  StrategyTester<NccStrategy>& strategy = choose<StrategyTester<NccStrategy>>(forwarder);
+  NccStrategyTester& strategy = choose<NccStrategyTester>(forwarder);
 
   shared_ptr<DummyFace> face1 = make_shared<DummyFace>();
   shared_ptr<DummyFace> face2 = make_shared<DummyFace>();

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -28,29 +28,19 @@
 
 #include "core/scheduler.hpp"
 #include <ndn-cxx/encoding/nfd-constants.hpp>
+#include <ndn-cxx/mgmt/nfd/route-flags-traits.hpp>
+#include <type_traits>
 
 namespace nfd {
 namespace rib {
 
 /** \brief represents a route for a name prefix
  */
-class Route
+class Route : public ndn::nfd::RouteFlagsTraits<Route>
 {
 public:
-  Route()
-    : faceId(0)
-    , origin(0)
-    , flags(0)
-    , cost(0)
-    , expires(time::steady_clock::TimePoint::min())
-    , m_expirationEvent()
-  {
-  }
+  Route();
 
-  bool
-  operator==(const Route& other) const;
-
-public:
   void
   setExpirationEvent(const scheduler::EventId eid)
   {
@@ -63,28 +53,31 @@ public:
     return m_expirationEvent;
   }
 
-  bool
-  isChildInherit() const
+  std::underlying_type<ndn::nfd::RouteFlags>::type
+  getFlags() const
   {
-    return flags & ndn::nfd::ROUTE_FLAG_CHILD_INHERIT;
-  }
-
-  bool
-  isCapture() const
-  {
-    return flags & ndn::nfd::ROUTE_FLAG_CAPTURE;
+    return flags;
   }
 
 public:
   uint64_t faceId;
-  uint64_t origin;
-  uint64_t flags;
+  ndn::nfd::RouteOrigin origin;
   uint64_t cost;
-  time::steady_clock::TimePoint expires;
+  std::underlying_type<ndn::nfd::RouteFlags>::type flags;
+  ndn::optional<time::steady_clock::TimePoint> expires;
 
 private:
   scheduler::EventId m_expirationEvent;
 };
+
+bool
+operator==(const Route& lhs, const Route& rhs);
+
+inline bool
+operator!=(const Route& lhs, const Route& rhs)
+{
+  return !(lhs == rhs);
+}
 
 inline bool
 compareFaceIdAndOrigin(const Route& lhs, const Route& rhs)

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,111 +27,213 @@
 
 #include "tests/test-common.hpp"
 #include "../fw/dummy-strategy.hpp"
-#include "../fw/install-strategy.hpp"
 
 namespace nfd {
 namespace tests {
 
-BOOST_AUTO_TEST_SUITE(Table)
-BOOST_FIXTURE_TEST_SUITE(TestStrategyChoice, BaseFixture)
-
 using fw::Strategy;
+
+class StrategyChoiceFixture : public BaseFixture
+{
+protected:
+  StrategyChoiceFixture()
+    : sc(forwarder.getStrategyChoice())
+    , strategyNameP("/strategy-choice-P/%FD%00")
+    , strategyNameQ("/strategy-choice-Q/%FD%00")
+  {
+    DummyStrategy::registerAs(strategyNameP);
+    DummyStrategy::registerAs(strategyNameQ);
+  }
+
+  /** \brief insert StrategyChoice entry at \p prefix for \p instanceName
+   *  \return constructed instance name
+   */
+  Name
+  insertAndGet(const Name& prefix, const Name& instanceName)
+  {
+    BOOST_REQUIRE(sc.insert(prefix, instanceName));
+    bool isFound;
+    Name foundName;
+    std::tie(isFound, foundName) = sc.get(prefix);
+    BOOST_REQUIRE(isFound);
+    return foundName;
+  }
+
+  /** \brief determine whether the effective strategy type at \p prefix is \p S
+   *  \tparam S expected strategy type
+   */
+  template<typename S>
+  bool
+  isStrategyType(const Name& prefix)
+  {
+    Strategy& effectiveStrategy = sc.findEffectiveStrategy(prefix);
+    return dynamic_cast<S*>(&effectiveStrategy) != nullptr;
+  }
+
+  template<typename Q>
+  Name
+  findInstanceName(const Q& query)
+  {
+    return sc.findEffectiveStrategy(query).getInstanceName();
+  }
+
+protected:
+  Forwarder forwarder;
+  StrategyChoice& sc;
+
+  const Name strategyNameP;
+  const Name strategyNameQ;
+};
+
+BOOST_AUTO_TEST_SUITE(Table)
+BOOST_FIXTURE_TEST_SUITE(TestStrategyChoice, StrategyChoiceFixture)
+
+BOOST_AUTO_TEST_CASE(Versioning)
+{
+  const Name strategyNameV("/strategy-choice-V");
+  const Name strategyNameV0("/strategy-choice-V/%FD%00");
+  const Name strategyNameV1("/strategy-choice-V/%FD%01");
+  const Name strategyNameV2("/strategy-choice-V/%FD%02");
+  const Name strategyNameV3("/strategy-choice-V/%FD%03");
+  const Name strategyNameV4("/strategy-choice-V/%FD%04");
+  const Name strategyNameV5("/strategy-choice-V/%FD%05");
+
+  VersionedDummyStrategy<1>::registerAs(strategyNameV1);
+  VersionedDummyStrategy<3>::registerAs(strategyNameV3);
+  VersionedDummyStrategy<4>::registerAs(strategyNameV4);
+
+  // unversioned: choose latest version
+  BOOST_CHECK_EQUAL(this->insertAndGet("/A", strategyNameV), strategyNameV4);
+  BOOST_CHECK(this->isStrategyType<VersionedDummyStrategy<4>>("/A"));
+
+  // exact version: choose same version
+  BOOST_CHECK_EQUAL(this->insertAndGet("/B", strategyNameV1), strategyNameV1);
+  BOOST_CHECK(this->isStrategyType<VersionedDummyStrategy<1>>("/B"));
+  BOOST_CHECK_EQUAL(this->insertAndGet("/C", strategyNameV3), strategyNameV3);
+  BOOST_CHECK(this->isStrategyType<VersionedDummyStrategy<3>>("/C"));
+  BOOST_CHECK_EQUAL(this->insertAndGet("/D", strategyNameV4), strategyNameV4);
+  BOOST_CHECK(this->isStrategyType<VersionedDummyStrategy<4>>("/D"));
+
+  // lower version: choose next higher version
+  BOOST_CHECK_EQUAL(this->insertAndGet("/E", strategyNameV0), strategyNameV0);
+  BOOST_CHECK(this->isStrategyType<VersionedDummyStrategy<1>>("/E"));
+  BOOST_CHECK_EQUAL(this->insertAndGet("/F", strategyNameV2), strategyNameV2);
+  BOOST_CHECK(this->isStrategyType<VersionedDummyStrategy<3>>("/F"));
+
+  // higher version: failure
+  StrategyChoice::InsertResult res5 = sc.insert("/G", strategyNameV5);
+  BOOST_CHECK(!res5);
+  BOOST_CHECK(!res5.isRegistered());
+}
+
+BOOST_AUTO_TEST_CASE(Parameters)
+{
+  // no parameters
+  BOOST_CHECK_EQUAL(this->insertAndGet("/A", strategyNameP), strategyNameP);
+
+  // one parameter
+  Name oneParamName = Name(strategyNameP).append("param");
+  BOOST_CHECK_EQUAL(this->insertAndGet("/B", oneParamName), oneParamName);
+
+  // two parameters
+  Name twoParamName = Name(strategyNameP).append("x").append("y");
+  BOOST_CHECK_EQUAL(this->insertAndGet("/C", twoParamName), twoParamName);
+
+  // parameter without version is disallowed
+  Name oneParamUnversioned = strategyNameP.getPrefix(-1).append("param");
+  BOOST_CHECK(!sc.insert("/D", oneParamUnversioned));
+}
+
+BOOST_AUTO_TEST_CASE(InsertLongName)
+{
+  Name n1;
+  while (n1.size() < NameTree::getMaxDepth()) {
+    n1.append("A");
+  }
+  Name n2 = n1;
+  while (n2.size() < NameTree::getMaxDepth() * 2) {
+    n2.append("B");
+  }
+
+  BOOST_CHECK(sc.insert(n1, strategyNameP));
+  BOOST_CHECK(!sc.insert(n2, strategyNameP));
+}
 
 BOOST_AUTO_TEST_CASE(Get)
 {
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  install<DummyStrategy>(forwarder, nameP);
-
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  BOOST_CHECK(table.insert("ndn:/", nameP));
+  BOOST_CHECK(sc.insert("/", strategyNameP));
   // { '/'=>P }
 
-  auto getRoot = table.get("ndn:/");
+  auto getRoot = sc.get("/");
   BOOST_CHECK_EQUAL(getRoot.first, true);
-  BOOST_CHECK_EQUAL(getRoot.second, nameP);
+  BOOST_CHECK_EQUAL(getRoot.second, strategyNameP);
 
-  auto getA = table.get("ndn:/A");
+  auto getA = sc.get("/A");
   BOOST_CHECK_EQUAL(getA.first, false);
 }
 
 BOOST_AUTO_TEST_CASE(FindEffectiveStrategy)
 {
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameQ("ndn:/strategy/Q");
-  Name nameZ("ndn:/strategy/Z");
-  install<DummyStrategy>(forwarder, nameP);
-  install<DummyStrategy>(forwarder, nameQ);
+  const Name strategyNameZ("/strategy-choice-Z/%FD%00"); // unregistered strategyName
 
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  BOOST_CHECK(table.insert("ndn:/", nameP));
+  BOOST_CHECK(sc.insert("/", strategyNameP));
   // { '/'=>P }
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/")   .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A")  .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A/B").getName(), nameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A/B"), strategyNameP);
 
-  BOOST_CHECK(table.insert("ndn:/A/B", nameP));
+  BOOST_CHECK(sc.insert("/A/B", strategyNameP));
   // { '/'=>P, '/A/B'=>P }
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/")   .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A")  .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A/B").getName(), nameP);
-  // same instance
-  BOOST_CHECK_EQUAL(&table.findEffectiveStrategy("ndn:/"),
-                    &table.findEffectiveStrategy("ndn:/A/B"));
+  BOOST_CHECK_EQUAL(this->findInstanceName("/"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A/B"), strategyNameP);
+  // same entry, same instance
+  BOOST_CHECK_EQUAL(&sc.findEffectiveStrategy("/"), &sc.findEffectiveStrategy("/A"));
+  // different entries, distinct instances
+  BOOST_CHECK_NE(&sc.findEffectiveStrategy("/"), &sc.findEffectiveStrategy("/A/B"));
 
-  table.erase("ndn:/A"); // no effect
+  sc.erase("/A"); // no effect
   // { '/'=>P, '/A/B'=>P }
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/")   .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A")  .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A/B").getName(), nameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A/B"), strategyNameP);
 
-  BOOST_CHECK(table.insert("ndn:/A", nameQ));
+  BOOST_CHECK(sc.insert("/A", strategyNameQ));
   // { '/'=>P, '/A/B'=>P, '/A'=>Q }
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/")   .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A")  .getName(), nameQ);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A/B").getName(), nameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A"), strategyNameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A/B"), strategyNameP);
 
-  table.erase("ndn:/A/B");
+  sc.erase("/A/B");
   // { '/'=>P, '/A'=>Q }
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/")   .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A")  .getName(), nameQ);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A/B").getName(), nameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A"), strategyNameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A/B"), strategyNameQ);
 
-  BOOST_CHECK(!table.insert("ndn:/", nameZ)); // non existent strategy
+  BOOST_CHECK(!sc.insert("/", strategyNameZ)); // non existent strategy
 
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  BOOST_CHECK(table.insert("ndn:/A", nameP));
+  BOOST_CHECK(sc.insert("/", strategyNameQ));
+  BOOST_CHECK(sc.insert("/A", strategyNameP));
   // { '/'=>Q, '/A'=>P }
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/")   .getName(), nameQ);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A")  .getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/A/B").getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/D")  .getName(), nameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/"), strategyNameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/A/B"), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName("/D"), strategyNameQ);
 }
 
 BOOST_AUTO_TEST_CASE(FindEffectiveStrategyWithPitEntry)
 {
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameQ("ndn:/strategy/Q");
-  install<DummyStrategy>(forwarder, nameP);
-  install<DummyStrategy>(forwarder, nameQ);
-
   shared_ptr<Data> dataABC = makeData("/A/B/C");
   Name fullName = dataABC->getFullName();
 
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  BOOST_CHECK(table.insert("/A", nameP));
-  BOOST_CHECK(table.insert(fullName, nameQ));
+  BOOST_CHECK(sc.insert("/A", strategyNameP));
+  BOOST_CHECK(sc.insert(fullName, strategyNameQ));
 
   Pit& pit = forwarder.getPit();
   shared_ptr<Interest> interestAB = makeInterest("/A/B");
@@ -139,63 +241,56 @@ BOOST_AUTO_TEST_CASE(FindEffectiveStrategyWithPitEntry)
   shared_ptr<Interest> interestFull = makeInterest(fullName);
   shared_ptr<pit::Entry> pitFull = pit.insert(*interestFull).first;
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy(*pitAB).getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy(*pitFull).getName(), nameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName(*pitAB), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName(*pitFull), strategyNameQ);
 }
 
 BOOST_AUTO_TEST_CASE(FindEffectiveStrategyWithMeasurementsEntry)
 {
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameQ("ndn:/strategy/Q");
-  install<DummyStrategy>(forwarder, nameP);
-  install<DummyStrategy>(forwarder, nameQ);
-
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  BOOST_CHECK(table.insert("/A", nameP));
-  BOOST_CHECK(table.insert("/A/B/C", nameQ));
+  BOOST_CHECK(sc.insert("/A", strategyNameP));
+  BOOST_CHECK(sc.insert("/A/B/C", strategyNameQ));
 
   Measurements& measurements = forwarder.getMeasurements();
   measurements::Entry& mAB = measurements.get("/A/B");
   measurements::Entry& mABCD = measurements.get("/A/B/C/D");
 
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy(mAB).getName(), nameP);
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy(mABCD).getName(), nameQ);
+  BOOST_CHECK_EQUAL(this->findInstanceName(mAB), strategyNameP);
+  BOOST_CHECK_EQUAL(this->findInstanceName(mABCD), strategyNameQ);
 }
 
-//XXX BOOST_CONCEPT_ASSERT((ForwardIterator<std::vector<int>::iterator>))
-//    is also failing. There might be a problem with ForwardIterator concept checking.
-//BOOST_CONCEPT_ASSERT((ForwardIterator<StrategyChoice::const_iterator>));
+BOOST_AUTO_TEST_CASE(Erase)
+{
+  NameTree& nameTree = forwarder.getNameTree();
+
+  sc.insert("/", strategyNameP);
+
+  size_t nNameTreeEntriesBefore = nameTree.size();
+
+  sc.insert("/A/B", strategyNameQ);
+  sc.erase("/A/B");
+  BOOST_CHECK_EQUAL(nameTree.size(), nNameTreeEntriesBefore);
+}
 
 BOOST_AUTO_TEST_CASE(Enumerate)
 {
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameQ("ndn:/strategy/Q");
-  install<DummyStrategy>(forwarder, nameP);
-  install<DummyStrategy>(forwarder, nameQ);
+  sc.insert("/",      strategyNameP);
+  sc.insert("/A/B",   strategyNameQ);
+  sc.insert("/A/B/C", strategyNameP);
+  sc.insert("/D",     strategyNameP);
+  sc.insert("/E",     strategyNameQ);
 
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  table.insert("ndn:/",      nameP);
-  table.insert("ndn:/A/B",   nameQ);
-  table.insert("ndn:/A/B/C", nameP);
-  table.insert("ndn:/D",     nameP);
-  table.insert("ndn:/E",     nameQ);
-
-  BOOST_CHECK_EQUAL(table.size(), 5);
+  BOOST_CHECK_EQUAL(sc.size(), 5);
 
   std::map<Name, Name> map; // namespace=>strategyName
-  for (StrategyChoice::const_iterator it = table.begin(); it != table.end(); ++it) {
-    map[it->getPrefix()] = it->getStrategyName();
+  for (StrategyChoice::const_iterator it = sc.begin(); it != sc.end(); ++it) {
+    map[it->getPrefix()] = it->getStrategyInstanceName();
   }
-  BOOST_CHECK_EQUAL(map.size(), 5);
-  BOOST_CHECK_EQUAL(map["ndn:/"],      nameP);
-  BOOST_CHECK_EQUAL(map["ndn:/A/B"],   nameQ);
-  BOOST_CHECK_EQUAL(map["ndn:/A/B/C"], nameP);
-  BOOST_CHECK_EQUAL(map["ndn:/D"],     nameP);
-  BOOST_CHECK_EQUAL(map["ndn:/E"],     nameQ);
+
+  BOOST_CHECK_EQUAL(map.at("/"),      strategyNameP);
+  BOOST_CHECK_EQUAL(map.at("/A/B"),   strategyNameQ);
+  BOOST_CHECK_EQUAL(map.at("/A/B/C"), strategyNameP);
+  BOOST_CHECK_EQUAL(map.at("/D"),     strategyNameP);
+  BOOST_CHECK_EQUAL(map.at("/E"),     strategyNameQ);
   BOOST_CHECK_EQUAL(map.size(), 5);
 }
 
@@ -211,140 +306,35 @@ public:
 
 BOOST_AUTO_TEST_CASE(ClearStrategyInfo)
 {
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameQ("ndn:/strategy/Q");
-  install<DummyStrategy>(forwarder, nameP);
-  install<DummyStrategy>(forwarder, nameQ);
-
-  StrategyChoice& table = forwarder.getStrategyChoice();
   Measurements& measurements = forwarder.getMeasurements();
 
-  BOOST_CHECK(table.insert("ndn:/", nameP));
+  BOOST_CHECK(sc.insert("/", strategyNameP));
   // { '/'=>P }
-  measurements.get("ndn:/").insertStrategyInfo<PStrategyInfo>();
-  measurements.get("ndn:/A").insertStrategyInfo<PStrategyInfo>();
-  measurements.get("ndn:/A/B").insertStrategyInfo<PStrategyInfo>();
-  measurements.get("ndn:/A/C").insertStrategyInfo<PStrategyInfo>();
+  measurements.get("/").insertStrategyInfo<PStrategyInfo>();
+  measurements.get("/A").insertStrategyInfo<PStrategyInfo>();
+  measurements.get("/A/B").insertStrategyInfo<PStrategyInfo>();
+  measurements.get("/A/C").insertStrategyInfo<PStrategyInfo>();
 
-  BOOST_CHECK(table.insert("ndn:/A/B", nameP));
+  BOOST_CHECK(sc.insert("/A/B", strategyNameP));
   // { '/'=>P, '/A/B'=>P }
-  BOOST_CHECK(measurements.get("ndn:/").getStrategyInfo<PStrategyInfo>() != nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A").getStrategyInfo<PStrategyInfo>() != nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A/B").getStrategyInfo<PStrategyInfo>() != nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A/C").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/A").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/A/B").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/A/C").getStrategyInfo<PStrategyInfo>() != nullptr);
 
-  BOOST_CHECK(table.insert("ndn:/A", nameQ));
+  BOOST_CHECK(sc.insert("/A", strategyNameQ));
   // { '/'=>P, '/A/B'=>P, '/A'=>Q }
-  BOOST_CHECK(measurements.get("ndn:/").getStrategyInfo<PStrategyInfo>() != nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A").getStrategyInfo<PStrategyInfo>() == nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A/B").getStrategyInfo<PStrategyInfo>() != nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A/C").getStrategyInfo<PStrategyInfo>() == nullptr);
+  BOOST_CHECK(measurements.get("/").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/A").getStrategyInfo<PStrategyInfo>() == nullptr);
+  BOOST_CHECK(measurements.get("/A/B").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/A/C").getStrategyInfo<PStrategyInfo>() == nullptr);
 
-  table.erase("ndn:/A/B");
+  sc.erase("/A/B");
   // { '/'=>P, '/A'=>Q }
-  BOOST_CHECK(measurements.get("ndn:/").getStrategyInfo<PStrategyInfo>() != nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A").getStrategyInfo<PStrategyInfo>() == nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A/B").getStrategyInfo<PStrategyInfo>() == nullptr);
-  BOOST_CHECK(measurements.get("ndn:/A/C").getStrategyInfo<PStrategyInfo>() == nullptr);
-}
-
-BOOST_AUTO_TEST_CASE(EraseNameTreeEntry)
-{
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameQ("ndn:/strategy/Q");
-  install<DummyStrategy>(forwarder, nameP);
-  install<DummyStrategy>(forwarder, nameQ);
-
-  NameTree& nameTree = forwarder.getNameTree();
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  table.insert("ndn:/", nameP);
-
-  size_t nNameTreeEntriesBefore = nameTree.size();
-
-  table.insert("ndn:/A/B", nameQ);
-  table.erase("ndn:/A/B");
-  BOOST_CHECK_EQUAL(nameTree.size(), nNameTreeEntriesBefore);
-}
-
-BOOST_AUTO_TEST_CASE(Versioning)
-{
-  Forwarder forwarder;
-  Name nameP("ndn:/strategy/P");
-  Name nameP1("ndn:/strategy/P/%FD%01");
-  Name nameP2("ndn:/strategy/P/%FD%02");
-  Name name3("ndn:/%FD%03");
-  Name name4("ndn:/%FD%04");
-  Name nameQ("ndn:/strategy/Q");
-  Name nameQ5("ndn:/strategy/Q/%FD%05");
-
-  StrategyChoice& table = forwarder.getStrategyChoice();
-
-  // install
-  auto strategyP1 = make_unique<DummyStrategy>(ref(forwarder), nameP1);
-  Strategy* instanceP1 = strategyP1.get();
-  auto strategyP1b = make_unique<DummyStrategy>(ref(forwarder), nameP1);
-  auto strategyP2 = make_unique<DummyStrategy>(ref(forwarder), nameP2);
-  auto strategy3 = make_unique<DummyStrategy>(ref(forwarder), name3);
-  auto strategy4 = make_unique<DummyStrategy>(ref(forwarder), name4);
-  auto strategyQ = make_unique<DummyStrategy>(ref(forwarder), nameQ);
-  auto strategyQ5 = make_unique<DummyStrategy>(ref(forwarder), nameQ5);
-
-  bool isInstalled = false;
-  Strategy* installed = nullptr;
-
-  std::tie(isInstalled, installed) = table.install(std::move(strategyP1));
-  BOOST_CHECK_EQUAL(isInstalled, true);
-  BOOST_CHECK_EQUAL(installed, instanceP1);
-  std::tie(isInstalled, installed) = table.install(std::move(strategyP1b));
-  BOOST_CHECK_EQUAL(isInstalled, false);
-  BOOST_CHECK_EQUAL(installed, instanceP1);
-
-  BOOST_CHECK_EQUAL(table.hasStrategy(nameP,  false), true);
-  BOOST_CHECK_EQUAL(table.hasStrategy(nameP,  true),  false);
-  BOOST_CHECK_EQUAL(table.hasStrategy(nameP1, true),  true);
-
-  BOOST_CHECK_EQUAL(table.install(std::move(strategyP2)).first, true);
-  BOOST_CHECK_EQUAL(table.install(std::move(strategy3)).first, true);
-  BOOST_CHECK_EQUAL(table.install(std::move(strategy4)).first, true);
-  BOOST_CHECK_EQUAL(table.install(std::move(strategyQ)).first, true);
-  BOOST_CHECK_EQUAL(table.install(std::move(strategyQ5)).first, true);
-
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  // exact match, { '/'=>Q }
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), nameQ);
-
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  BOOST_CHECK(table.insert("ndn:/", nameP));
-  // { '/'=>P2 }
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), nameP2);
-
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  BOOST_CHECK(table.insert("ndn:/", nameP1));
-  // { '/'=>P1 }
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), nameP1);
-
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  BOOST_CHECK(table.insert("ndn:/", nameP2));
-  // { '/'=>P2 }
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), nameP2);
-
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  BOOST_CHECK(! table.insert("ndn:/", "ndn:/strategy/A"));
-  // not installed
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), nameQ);
-
-  BOOST_CHECK(table.insert("ndn:/", nameQ));
-  BOOST_CHECK(! table.insert("ndn:/", "ndn:/strategy/Z"));
-  // not installed
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), nameQ);
-
-  BOOST_CHECK(table.insert("ndn:/", nameP1));
-  BOOST_CHECK(table.insert("ndn:/", "ndn:/"));
-  // match one component longer only, { '/'=>4 }
-  BOOST_CHECK_EQUAL(table.findEffectiveStrategy("ndn:/").getName(), name4);
+  BOOST_CHECK(measurements.get("/").getStrategyInfo<PStrategyInfo>() != nullptr);
+  BOOST_CHECK(measurements.get("/A").getStrategyInfo<PStrategyInfo>() == nullptr);
+  BOOST_CHECK(measurements.get("/A/B").getStrategyInfo<PStrategyInfo>() == nullptr);
+  BOOST_CHECK(measurements.get("/A/C").getStrategyInfo<PStrategyInfo>() == nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestStrategyChoice

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,60 +26,123 @@
 #include "websocket-factory.hpp"
 
 namespace nfd {
+namespace face {
 
 namespace ip = boost::asio::ip;
 
-shared_ptr<WebSocketChannel>
-WebSocketFactory::createChannel(const websocket::Endpoint& endpoint)
+NFD_LOG_INIT("WebSocketFactory");
+NFD_REGISTER_PROTOCOL_FACTORY(WebSocketFactory);
+
+const std::string&
+WebSocketFactory::getId()
 {
-  auto channel = findChannel(endpoint);
-  if (channel)
-    return channel;
-
-  channel = make_shared<WebSocketChannel>(endpoint);
-  m_channels[endpoint] = channel;
-
-  return channel;
+  static std::string id("websocket");
+  return id;
 }
 
-shared_ptr<WebSocketChannel>
-WebSocketFactory::createChannel(const std::string& localIp, const std::string& localPort)
+WebSocketFactory::WebSocketFactory(const CtorParams& params)
+  : ProtocolFactory(params)
 {
-  websocket::Endpoint endpoint(ip::address::from_string(localIp),
-                               boost::lexical_cast<uint16_t>(localPort));
-  return createChannel(endpoint);
 }
 
 void
-WebSocketFactory::createFace(const FaceUri& uri,
-                             ndn::nfd::FacePersistency persistency,
-                             bool wantLocalFieldsEnabled,
+WebSocketFactory::processConfig(OptionalConfigSection configSection,
+                                FaceSystem::ConfigContext& context)
+{
+  // websocket
+  // {
+  //   listen yes
+  //   port 9696
+  //   enable_v4 yes
+  //   enable_v6 yes
+  // }
+
+  bool wantListen = false;
+  uint16_t port = 9696;
+  bool enableV4 = true;
+  bool enableV6 = true;
+
+  if (configSection) {
+    wantListen = true;
+    for (const auto& pair : *configSection) {
+      const std::string& key = pair.first;
+
+      if (key == "listen") {
+        wantListen = ConfigFile::parseYesNo(pair, "face_system.websocket");
+      }
+      else if (key == "port") {
+        port = ConfigFile::parseNumber<uint16_t>(pair, "face_system.websocket");
+      }
+      else if (key == "enable_v4") {
+        enableV4 = ConfigFile::parseYesNo(pair, "face_system.websocket");
+      }
+      else if (key == "enable_v6") {
+        enableV6 = ConfigFile::parseYesNo(pair, "face_system.websocket");
+      }
+      else {
+        BOOST_THROW_EXCEPTION(ConfigFile::Error("Unrecognized option face_system.websocket." + key));
+      }
+    }
+  }
+
+  if (!enableV4 && !enableV6) {
+    BOOST_THROW_EXCEPTION(ConfigFile::Error(
+      "IPv4 and IPv6 WebSocket channels have been disabled. Remove face_system.websocket section "
+      "to disable WebSocket channels or enable at least one channel type."));
+  }
+
+  if (!enableV4 && enableV6) {
+    // websocketpp's IPv6 socket always accepts IPv4 connections.
+    BOOST_THROW_EXCEPTION(ConfigFile::Error("NFD does not allow pure IPv6 WebSocket channel."));
+  }
+
+  if (!context.isDryRun) {
+    if (!wantListen) {
+      if (!m_channels.empty()) {
+        NFD_LOG_WARN("Cannot close WebSocket channel after initialization");
+      }
+      return;
+    }
+
+    BOOST_ASSERT(enableV4);
+    websocket::Endpoint endpoint(enableV6 ? ip::tcp::v6() : ip::tcp::v4(), port);
+
+    auto channel = this->createChannel(endpoint);
+    if (!channel->isListening()) {
+      channel->listen(this->addFace);
+      if (m_channels.size() > 1) {
+        NFD_LOG_WARN("Adding WebSocket channel for new endpoint; cannot close existing channels");
+      }
+    }
+  }
+}
+
+void
+WebSocketFactory::createFace(const CreateFaceRequest& req,
                              const FaceCreatedCallback& onCreated,
                              const FaceCreationFailedCallback& onFailure)
 {
   onFailure(406, "Unsupported protocol");
 }
 
+shared_ptr<WebSocketChannel>
+WebSocketFactory::createChannel(const websocket::Endpoint& endpoint)
+{
+  auto it = m_channels.find(endpoint);
+  if (it != m_channels.end())
+    return it->second;
+
+  auto channel = make_shared<WebSocketChannel>(endpoint);
+  m_channels[endpoint] = channel;
+
+  return channel;
+}
+
 std::vector<shared_ptr<const Channel>>
 WebSocketFactory::getChannels() const
 {
-  std::vector<shared_ptr<const Channel>> channels;
-  channels.reserve(m_channels.size());
-
-  for (const auto& i : m_channels)
-    channels.push_back(i.second);
-
-  return channels;
+  return getChannelsFromMap(m_channels);
 }
 
-shared_ptr<WebSocketChannel>
-WebSocketFactory::findChannel(const websocket::Endpoint& endpoint) const
-{
-  auto i = m_channels.find(endpoint);
-  if (i != m_channels.end())
-    return i->second;
-  else
-    return nullptr;
-}
-
+} // namespace face
 } // namespace nfd

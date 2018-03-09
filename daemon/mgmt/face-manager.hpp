@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,27 +27,22 @@
 #define NFD_DAEMON_MGMT_FACE_MANAGER_HPP
 
 #include "nfd-manager-base.hpp"
+#include "face/face-system.hpp"
 #include <ndn-cxx/mgmt/nfd/face-status.hpp>
 #include <ndn-cxx/mgmt/nfd/face-query-filter.hpp>
 #include <ndn-cxx/mgmt/nfd/face-event-notification.hpp>
-#include "face/face.hpp"
 
 namespace nfd {
 
-class FaceTable;
-class NetworkInterfaceInfo;
-class ProtocolFactory;
-
 /**
  * @brief implement the Face Management of NFD Management Protocol.
- * @sa http://redmine.named-data.net/projects/nfd/wiki/FaceMgmt
+ * @sa https://redmine.named-data.net/projects/nfd/wiki/FaceMgmt
  */
 class FaceManager : public NfdManagerBase
 {
 public:
-  FaceManager(FaceTable& faceTable,
-              Dispatcher& dispatcher,
-              CommandAuthenticator& authenticator);
+  FaceManager(FaceSystem& faceSystem,
+              Dispatcher& dispatcher, CommandAuthenticator& authenticator);
 
   /**
    * @brief Subscribe to face_system section for the config file
@@ -71,22 +66,6 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE: // ControlCommand
               const ControlParameters& parameters,
               const ndn::mgmt::CommandContinuation& done);
 
-  /**
-   * \deprecated use Flags+Mask in faces/update instead
-   */
-  void
-  enableLocalControl(const Name& topPrefix, const Interest& interest,
-                     const ControlParameters& parameters,
-                     const ndn::mgmt::CommandContinuation& done);
-
-  /**
-   * \deprecated use Flags+Mask in faces/update instead
-   */
-  void
-  disableLocalControl(const Name& topPrefix, const Interest& interest,
-                      const ControlParameters& parameters,
-                      const ndn::mgmt::CommandContinuation& done);
-
 PUBLIC_WITH_TESTS_ELSE_PRIVATE: // helpers for ControlCommand
   void
   afterCreateFaceSuccess(const ControlParameters& parameters,
@@ -98,15 +77,12 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE: // helpers for ControlCommand
                          const std::string& reason,
                          const ndn::mgmt::CommandContinuation& done);
 
-  Face*
-  findFaceForLocalControl(const Interest& request,
-                          const ControlParameters& parameters,
-                          const ndn::mgmt::CommandContinuation& done);
-
   static void
   setLinkServiceOptions(Face& face,
-                        const ControlParameters& parameters,
-                        ControlParameters& response);
+                        const ControlParameters& parameters);
+
+  static ControlParameters
+  collectFaceProperties(const Face& face, bool wantUris);
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE: // StatusDataset
   void
@@ -144,31 +120,11 @@ private: // NotificationStream
   void
   connectFaceStateChangeSignal(const Face& face);
 
-private: // configuration
-  void
-  processConfig(const ConfigSection& configSection, bool isDryRun,
-                const std::string& filename);
-
-  void
-  processSectionUnix(const ConfigSection& configSection, bool isDryRun);
-
-  void
-  processSectionTcp(const ConfigSection& configSection, bool isDryRun);
-
-  void
-  processSectionUdp(const ConfigSection& configSection, bool isDryRun,
-                    const std::vector<NetworkInterfaceInfo>& nicList);
-
-  void
-  processSectionEther(const ConfigSection& configSection, bool isDryRun,
-                      const std::vector<NetworkInterfaceInfo>& nicList);
-
-  void
-  processSectionWebSocket(const ConfigSection& configSection, bool isDryRun);
+private:
+  FaceSystem& m_faceSystem;
+  FaceTable& m_faceTable;
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
-  std::map<std::string /*protocol*/, shared_ptr<ProtocolFactory>> m_factories;
-  FaceTable& m_faceTable;
   std::map<FaceId, signal::ScopedConnection> m_faceStateChangeConn;
 
 private:

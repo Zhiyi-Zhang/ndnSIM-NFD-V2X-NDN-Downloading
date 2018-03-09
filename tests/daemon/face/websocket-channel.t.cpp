@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -30,6 +30,7 @@
 #include "test-ip.hpp"
 
 namespace nfd {
+namespace face {
 namespace tests {
 
 namespace ip = boost::asio::ip;
@@ -37,7 +38,7 @@ namespace ip = boost::asio::ip;
 class WebSocketChannelFixture : public ChannelFixture<WebSocketChannel, websocket::Endpoint>
 {
 protected:
-  virtual unique_ptr<WebSocketChannel>
+  unique_ptr<WebSocketChannel>
   makeChannel(const ip::address& addr, uint16_t port = 0) final
   {
     if (port == 0)
@@ -48,8 +49,8 @@ protected:
 
   void
   listen(const ip::address& addr,
-         const time::milliseconds& pingInterval = time::seconds(10),
-         const time::milliseconds& pongTimeout = time::seconds(1))
+         const time::milliseconds& pingInterval = 10_s,
+         const time::milliseconds& pongTimeout = 1_s)
   {
     listenerEp = websocket::Endpoint(addr, 20030);
     listenerChannel = makeChannel(addr, 20030);
@@ -79,13 +80,13 @@ protected:
 
   void
   initialize(const ip::address& addr,
-             const time::milliseconds& pingInterval = time::seconds(10),
-             const time::milliseconds& pongTimeout = time::seconds(1))
+             const time::milliseconds& pingInterval = 10_s,
+             const time::milliseconds& pongTimeout = 1_s)
   {
     listen(addr, pingInterval, pongTimeout);
     clientConnect(client);
     BOOST_REQUIRE_EQUAL(limitedIo.run(2, // listenerOnFaceCreated, clientHandleOpen
-                        time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                      1_s), LimitedIo::EXCEED_OPS);
     BOOST_REQUIRE_EQUAL(listenerChannel->size(), 1);
   }
 
@@ -149,8 +150,9 @@ protected:
   std::vector<std::string> clientReceivedMessages;
 
   time::steady_clock::Duration measuredPingInterval;
-  bool clientShouldPong = true; // set clientShouldPong false to disable the pong response,
-                                // which will cause timeout in listenerChannel
+  // set clientShouldPong to false to disable the pong response,
+  // which will eventually cause a timeout in listenerChannel
+  bool clientShouldPong = true;
 
 private:
   time::steady_clock::TimePoint m_prevPingRecvTime;
@@ -181,7 +183,7 @@ BOOST_AUTO_TEST_CASE(Listen)
 
 BOOST_AUTO_TEST_CASE(MultipleAccepts)
 {
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
   this->listen(address);
 
@@ -192,7 +194,7 @@ BOOST_AUTO_TEST_CASE(MultipleAccepts)
   this->clientConnect(client1);
 
   BOOST_CHECK_EQUAL(limitedIo.run(2, // listenerOnFaceCreated, clientHandleOpen
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  1_s), LimitedIo::EXCEED_OPS);
   BOOST_CHECK_EQUAL(listenerChannel->size(), 1);
 
   websocket::Client client2;
@@ -201,7 +203,7 @@ BOOST_AUTO_TEST_CASE(MultipleAccepts)
   this->clientConnect(client3);
 
   BOOST_CHECK_EQUAL(limitedIo.run(4, // 2 listenerOnFaceCreated, 2 clientHandleOpen
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  2_s), LimitedIo::EXCEED_OPS);
   BOOST_CHECK_EQUAL(listenerChannel->size(), 3);
 
   // check face persistency
@@ -212,20 +214,20 @@ BOOST_AUTO_TEST_CASE(MultipleAccepts)
 
 BOOST_AUTO_TEST_CASE(Send)
 {
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
   this->initialize(address);
   auto transport = listenerFaces.front()->getTransport();
 
   Block pkt1 = ndn::encoding::makeStringBlock(300, "hello");
-  transport->send(face::Transport::Packet(Block(pkt1)));
+  transport->send(Transport::Packet(Block(pkt1)));
   BOOST_CHECK_EQUAL(limitedIo.run(1, // clientHandleMessage
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  1_s), LimitedIo::EXCEED_OPS);
 
   Block pkt2 = ndn::encoding::makeStringBlock(301, "world!");
-  transport->send(face::Transport::Packet(Block(pkt2)));
+  transport->send(Transport::Packet(Block(pkt2)));
   BOOST_CHECK_EQUAL(limitedIo.run(1, // clientHandleMessage
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  1_s), LimitedIo::EXCEED_OPS);
 
   BOOST_REQUIRE_EQUAL(clientReceivedMessages.size(), 2);
   BOOST_CHECK_EQUAL_COLLECTIONS(
@@ -240,7 +242,7 @@ BOOST_AUTO_TEST_CASE(Send)
 
 BOOST_AUTO_TEST_CASE(Receive)
 {
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
   this->initialize(address);
 
@@ -251,11 +253,11 @@ BOOST_AUTO_TEST_CASE(Receive)
 
   clientSendInterest(*interest1);
   BOOST_CHECK_EQUAL(limitedIo.run(1, // faceAfterReceiveInterest
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  1_s), LimitedIo::EXCEED_OPS);
 
   clientSendInterest(*interest2);
   BOOST_CHECK_EQUAL(limitedIo.run(1, // faceAfterReceiveInterest
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  1_s), LimitedIo::EXCEED_OPS);
 
   BOOST_REQUIRE_EQUAL(faceReceivedInterests.size(), 2);
   BOOST_CHECK_EQUAL(faceReceivedInterests[0].getName(), interest1->getName());
@@ -264,7 +266,7 @@ BOOST_AUTO_TEST_CASE(Receive)
 
 BOOST_AUTO_TEST_CASE(FaceClosure)
 {
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
   this->initialize(address);
 
@@ -274,44 +276,45 @@ BOOST_AUTO_TEST_CASE(FaceClosure)
 
 BOOST_AUTO_TEST_CASE(RemoteClose)
 {
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
   this->initialize(address);
 
   client.close(clientHandle, websocketpp::close::status::going_away, "");
   BOOST_CHECK_EQUAL(limitedIo.run(1, // faceClosedSignal
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  1_s), LimitedIo::EXCEED_OPS);
   BOOST_CHECK_EQUAL(listenerChannel->size(), 0);
 }
 
 BOOST_AUTO_TEST_CASE(SetPingInterval)
 {
-  auto pingInterval = time::milliseconds(300);
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
-  this->initialize(address, pingInterval, time::milliseconds(1000));
+  const auto pingInterval = 1200_ms;
+  this->initialize(address, pingInterval);
 
   BOOST_CHECK_EQUAL(limitedIo.run(2, // clientHandlePing
-                    time::seconds(1)), LimitedIo::EXCEED_OPS);
+                                  pingInterval * 3), LimitedIo::EXCEED_OPS);
   BOOST_CHECK_LE(measuredPingInterval, pingInterval * 1.1);
   BOOST_CHECK_GE(measuredPingInterval, pingInterval * 0.9);
 }
 
 BOOST_AUTO_TEST_CASE(SetPongTimeOut)
 {
-  auto address = getTestIp<ip::address_v4>(LoopbackAddress::Yes);
+  auto address = getTestIp(AddressFamily::V4, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
-  this->initialize(address, time::milliseconds(500), time::milliseconds(300));
+  this->initialize(address, 600_ms, 300_ms);
   clientShouldPong = false;
 
   BOOST_CHECK_EQUAL(limitedIo.run(2, // clientHandlePing, faceClosedSignal
-                    time::seconds(2)), LimitedIo::EXCEED_OPS);
+                                  2_s), LimitedIo::EXCEED_OPS);
   BOOST_CHECK_EQUAL(listenerChannel->size(), 0);
 
-  auto transport = static_cast<face::WebSocketTransport*>(listenerFaces.front()->getTransport());
-  BOOST_CHECK(transport->getState() == face::TransportState::FAILED ||
-              transport->getState() == face::TransportState::CLOSED);
-  BOOST_CHECK_EQUAL(transport->getCounters().nOutPings, 1);
+  auto transport = static_cast<WebSocketTransport*>(listenerFaces.front()->getTransport());
+  BOOST_CHECK(transport->getState() == TransportState::FAILED ||
+              transport->getState() == TransportState::CLOSED);
+  BOOST_CHECK_GE(transport->getCounters().nOutPings, 1);
+  BOOST_CHECK_LE(transport->getCounters().nOutPings, 2);
   BOOST_CHECK_EQUAL(transport->getCounters().nInPongs, 0);
 }
 
@@ -319,4 +322,5 @@ BOOST_AUTO_TEST_SUITE_END() // TestWebSocketChannel
 BOOST_AUTO_TEST_SUITE_END() // Face
 
 } // namespace tests
+} // namespace face
 } // namespace nfd

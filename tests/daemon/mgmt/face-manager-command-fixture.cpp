@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,6 +25,8 @@
 
 #include "face-manager-command-fixture.hpp"
 
+#include <ndn-cxx/net/network-monitor-stub.hpp>
+
 namespace nfd {
 namespace tests {
 
@@ -32,7 +34,8 @@ FaceManagerCommandNode::FaceManagerCommandNode(ndn::KeyChain& keyChain, uint16_t
   : face(getGlobalIoService(), keyChain, {true, true})
   , dispatcher(face, keyChain, ndn::security::SigningInfo())
   , authenticator(CommandAuthenticator::create())
-  , manager(faceTable, dispatcher, *authenticator)
+  , faceSystem(faceTable, make_shared<ndn::net::NetworkMonitorStub>(0))
+  , manager(faceSystem, dispatcher, *authenticator)
 {
   dispatcher.addTopPrefix("/localhost/nfd");
 
@@ -82,6 +85,24 @@ FaceManagerCommandNode::~FaceManagerCommandNode()
   for (Face& face : facesToClose) {
     face.close();
   }
+}
+
+const Face*
+FaceManagerCommandNode::findFaceByUri(const std::string& uri) const
+{
+  for (const auto& face : faceTable) {
+    if (face.getRemoteUri().toString() == uri) {
+      return &face;
+    }
+  }
+  return nullptr;
+}
+
+FaceId
+FaceManagerCommandNode::findFaceIdByUri(const std::string& uri) const
+{
+  auto face = findFaceByUri(uri);
+  return face != nullptr ? face->getId() : face::INVALID_FACEID;
 }
 
 FaceManagerCommandFixture::FaceManagerCommandFixture()

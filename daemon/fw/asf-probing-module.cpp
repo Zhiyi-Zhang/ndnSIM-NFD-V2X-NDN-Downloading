@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,12 +25,14 @@
 
 #include "asf-probing-module.hpp"
 #include "core/random.hpp"
+#include "algorithm.hpp"
 
 namespace nfd {
 namespace fw {
 namespace asf {
 
-constexpr time::seconds ProbingModule::DEFAULT_PROBING_INTERVAL;
+constexpr time::milliseconds ProbingModule::DEFAULT_PROBING_INTERVAL;
+constexpr time::milliseconds ProbingModule::MIN_PROBING_INTERVAL;
 
 static_assert(ProbingModule::DEFAULT_PROBING_INTERVAL < AsfMeasurements::MEASUREMENTS_LIFETIME,
               "ProbingModule::DEFAULT_PROBING_INTERVAL must be less than AsfMeasurements::MEASUREMENTS_LIFETIME");
@@ -84,12 +86,13 @@ ProbingModule::getFaceToProbe(const Face& inFace,
     Face& hopFace = hop.getFace();
 
     // Don't send probe Interest back to the incoming face or use the same face
-    // as the forwarded Interest
-    if (hopFace.getId() == inFace.getId() || hopFace.getId() == faceUsed.getId()) {
+    // as the forwarded Interest or use a face that violates scope
+    if (hopFace.getId() == inFace.getId() || hopFace.getId() == faceUsed.getId() ||
+        wouldViolateScope(inFace, interest, hopFace)) {
       continue;
     }
 
-    FaceInfo* info = m_measurements.getFaceInfo(fibEntry, interest, hopFace);
+    FaceInfo* info = m_measurements.getFaceInfo(fibEntry, interest, hopFace.getId());
 
     // If no RTT has been recorded, probe this face
     if (info == nullptr || !info->hasSrttMeasurement()) {
@@ -185,6 +188,19 @@ ProbingModule::getRandomNumber(double start, double end)
 {
   std::uniform_real_distribution<double> dist(start, end);
   return dist(getGlobalRng());
+}
+
+void
+ProbingModule::setProbingInterval(size_t probingInterval)
+{
+  if (time::milliseconds(probingInterval) >= MIN_PROBING_INTERVAL) {
+    m_probingInterval = time::milliseconds(probingInterval);
+  }
+  else {
+    BOOST_THROW_EXCEPTION(std::invalid_argument("Probing interval should be >= "
+                                                + to_string(MIN_PROBING_INTERVAL.count())
+                                                + " milliseconds"));
+  }
 }
 
 } // namespace asf

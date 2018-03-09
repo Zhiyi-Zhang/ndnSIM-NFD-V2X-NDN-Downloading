@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,86 +27,108 @@
 #define NFD_DAEMON_FACE_ETHERNET_FACTORY_HPP
 
 #include "protocol-factory.hpp"
-#include "core/network-interface.hpp"
+#include "ethernet-channel.hpp"
 
 namespace nfd {
+namespace face {
 
+/** \brief protocol factory for Ethernet
+ */
 class EthernetFactory : public ProtocolFactory
 {
 public:
-  /**
-   * \brief Exception of EthernetFactory
+  static const std::string&
+  getId();
+
+  explicit
+  EthernetFactory(const CtorParams& params);
+
+  /** \brief process face_system.ether config section
    */
-  class Error : public ProtocolFactory::Error
-  {
-  public:
-    explicit
-    Error(const std::string& what)
-      : ProtocolFactory::Error(what)
-    {
-    }
-  };
+  void
+  processConfig(OptionalConfigSection configSection,
+                FaceSystem::ConfigContext& context) override;
 
-  typedef std::map<std::pair<std::string, ethernet::Address>,
-                   shared_ptr<Face>> MulticastFaceMap;
-
-  /**
-   * \brief Create an EthernetFace to communicate with the given multicast group
-   *
-   * If this method is called twice with the same interface and group, only
-   * one face will be created. Instead, the second call will just retrieve
-   * the existing face.
-   *
-   * \param interface Local network interface
-   * \param address   Ethernet broadcast/multicast destination address
-   *
-   * \returns always a valid shared pointer to an EthernetFace object,
-   *          an exception will be thrown if the creation fails
-   *
-   * \throws EthernetFactory::Error or EthernetTransport::Error
-   */
-  shared_ptr<Face>
-  createMulticastFace(const NetworkInterfaceInfo& interface,
-                      const ethernet::Address& address);
-
-  /**
-   * \brief Get map of configured multicast faces
-   */
-  const MulticastFaceMap&
-  getMulticastFaces() const;
-
-public: // from ProtocolFactory
-  virtual void
-  createFace(const FaceUri& uri,
-             ndn::nfd::FacePersistency persistency,
-             bool wantLocalFieldsEnabled,
+  void
+  createFace(const CreateFaceRequest& req,
              const FaceCreatedCallback& onCreated,
              const FaceCreationFailedCallback& onFailure) override;
 
-  virtual std::vector<shared_ptr<const Channel>>
+  /**
+   * \brief Create Ethernet-based channel on the specified network interface
+   *
+   * If this method is called twice with the same endpoint, only one channel
+   * will be created. The second call will just return the existing channel.
+   *
+   * \return always a valid pointer to a EthernetChannel object, an exception
+   *         is thrown if it cannot be created.
+   * \throw PcapHelper::Error channel creation failed
+   */
+  shared_ptr<EthernetChannel>
+  createChannel(const shared_ptr<const ndn::net::NetworkInterface>& localEndpoint,
+                time::nanoseconds idleTimeout);
+
+  std::vector<shared_ptr<const Channel>>
   getChannels() const override;
 
-private:
   /**
-   * \brief Look up EthernetFace using specified interface and address
+   * \brief Create a face to communicate on the given Ethernet multicast group
    *
-   * \returns shared pointer to the existing EthernetFace object
-   *          or nullptr when such face does not exist
+   * If this method is called twice with the same arguments, only one face
+   * will be created. The second call will just return the existing face.
+   *
+   * \param localEndpoint local network interface
+   * \param group multicast group address
+   *
+   * \throw EthernetTransport::Error transport creation fails
    */
   shared_ptr<Face>
-  findMulticastFace(const std::string& interfaceName,
-                    const ethernet::Address& address) const;
+  createMulticastFace(const ndn::net::NetworkInterface& localEndpoint,
+                      const ethernet::Address& group);
 
 private:
-  MulticastFaceMap m_multicastFaces;
+  /** \brief Create EthernetChannel on \p netif if requested by \p m_unicastConfig.
+   *  \return new or existing channel, or nullptr if no channel should be created
+   */
+  shared_ptr<EthernetChannel>
+  applyUnicastConfigToNetif(const shared_ptr<const ndn::net::NetworkInterface>& netif);
+
+  /** \brief Create Ethernet multicast face on \p netif if requested by \p m_mcastConfig.
+   *  \return new or existing face, or nullptr if no face should be created
+   */
+  shared_ptr<Face>
+  applyMcastConfigToNetif(const ndn::net::NetworkInterface& netif);
+
+  void
+  applyConfig(const FaceSystem::ConfigContext& context);
+
+private:
+  std::map<std::string, shared_ptr<EthernetChannel>> m_channels; ///< ifname => channel
+
+  struct UnicastConfig
+  {
+    bool isEnabled = false;
+    bool wantListen = false;
+    time::nanoseconds idleTimeout = 10_min;
+  };
+  UnicastConfig m_unicastConfig;
+
+  struct MulticastConfig
+  {
+    bool isEnabled = false;
+    ethernet::Address group = ethernet::getDefaultMulticastAddress();
+    ndn::nfd::LinkType linkType = ndn::nfd::LINK_TYPE_MULTI_ACCESS;
+    NetworkInterfacePredicate netifPredicate;
+  };
+  MulticastConfig m_mcastConfig;
+
+  /// (ifname, group) => face
+  std::map<std::pair<std::string, ethernet::Address>, shared_ptr<Face>> m_mcastFaces;
+
+  signal::ScopedConnection m_netifAddConn;
 };
 
-inline const EthernetFactory::MulticastFaceMap&
-EthernetFactory::getMulticastFaces() const
-{
-  return m_multicastFaces;
-}
-
+} // namespace face
 } // namespace nfd
 
 #endif // NFD_DAEMON_FACE_ETHERNET_FACTORY_HPP

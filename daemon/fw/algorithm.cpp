@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -52,29 +52,6 @@ wouldViolateScope(const Face& inFace, const Interest& interest, const Face& outF
   }
 
   // Interest name is not subject to scope control
-  return false;
-}
-
-bool
-violatesScope(const pit::Entry& pitEntry, const Face& outFace)
-{
-  if (outFace.getScope() == ndn::nfd::FACE_SCOPE_LOCAL) {
-    return false;
-  }
-  BOOST_ASSERT(outFace.getScope() == ndn::nfd::FACE_SCOPE_NON_LOCAL);
-
-  if (scope_prefix::LOCALHOST.isPrefixOf(pitEntry.getName())) {
-    // face is non-local, violates localhost scope
-    return true;
-  }
-
-  if (scope_prefix::LOCALHOP.isPrefixOf(pitEntry.getName())) {
-    // face is non-local, violates localhop scope unless PIT entry has local in-record
-    return std::none_of(pitEntry.in_begin(), pitEntry.in_end(),
-      [] (const pit::InRecord& inRecord) { return inRecord.getFace().getScope() == ndn::nfd::FACE_SCOPE_LOCAL; });
-  }
-
-  // Name is not subject to scope control
   return false;
 }
 
@@ -141,6 +118,19 @@ hasPendingOutRecords(const pit::Entry& pitEntry)
                         return outRecord.getExpiry() >= now &&
                                outRecord.getIncomingNack() == nullptr;
                       });
+}
+
+time::steady_clock::TimePoint
+getLastOutgoing(const pit::Entry& pitEntry)
+{
+  pit::OutRecordCollection::const_iterator lastOutgoing = std::max_element(
+    pitEntry.out_begin(), pitEntry.out_end(),
+    [] (const pit::OutRecord& a, const pit::OutRecord& b) {
+      return a.getLastRenewed() < b.getLastRenewed();
+    });
+  BOOST_ASSERT(lastOutgoing != pitEntry.out_end());
+
+  return lastOutgoing->getLastRenewed();
 }
 
 } // namespace fw

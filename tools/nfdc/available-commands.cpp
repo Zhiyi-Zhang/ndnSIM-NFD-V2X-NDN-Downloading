@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,10 +24,11 @@
  */
 
 #include "available-commands.hpp"
+#include "face-module.hpp"
 #include "help.hpp"
+#include "rib-module.hpp"
 #include "status.hpp"
-#include "legacy-status.hpp"
-#include "legacy-nfdc.hpp"
+#include "strategy-choice-module.hpp"
 
 namespace nfd {
 namespace tools {
@@ -38,29 +39,9 @@ registerCommands(CommandParser& parser)
 {
   registerHelpCommand(parser);
   registerStatusCommands(parser);
-  registerLegacyStatusCommand(parser);
-
-  struct LegacyNfdcCommandDefinition
-  {
-    std::string subcommand;
-    std::string title;
-  };
-  const std::vector<LegacyNfdcCommandDefinition> legacyNfdcSubcommands{
-    {"register", "register a prefix"},
-    {"unregister", "unregister a prefix"},
-    {"create", "create a face"},
-    {"destroy", "destroy a face"},
-    {"set-strategy", "set strategy choice on namespace"},
-    {"unset-strategy", "unset strategy choice on namespace"},
-    {"add-nexthop", "add FIB nexthop"},
-    {"remove-nexthop", "remove FIB nexthop"}
-  };
-  for (const LegacyNfdcCommandDefinition& lncd : legacyNfdcSubcommands) {
-    CommandDefinition def(lncd.subcommand, "");
-    def.setTitle(lncd.title);
-    def.addArg("args", ArgValueType::ANY, Required::NO, Positional::YES);
-    parser.addCommand(def, &legacyNfdcMain);
-  }
+  FaceModule::registerCommands(parser);
+  RibModule::registerCommands(parser);
+  StrategyChoiceModule::registerCommands(parser);
 }
 
 } // namespace nfdc

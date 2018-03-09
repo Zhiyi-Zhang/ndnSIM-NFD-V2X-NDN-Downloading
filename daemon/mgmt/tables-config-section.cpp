@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,6 +24,7 @@
  */
 
 #include "tables-config-section.hpp"
+#include "fw/strategy.hpp"
 
 namespace nfd {
 
@@ -50,6 +51,7 @@ TablesConfigSection::ensureConfigured()
   }
 
   m_forwarder.getCs().setLimit(DEFAULT_CS_MAX_PACKETS);
+  // Don't set default cs_policy because it's already created by CS itself.
   m_forwarder.setUnsolicitedDataPolicy(make_unique<fw::DefaultUnsolicitedDataPolicy>());
 
   m_isConfigured = true;
@@ -58,34 +60,43 @@ TablesConfigSection::ensureConfigured()
 void
 TablesConfigSection::processConfig(const ConfigSection& section, bool isDryRun)
 {
-  typedef boost::optional<const ConfigSection&> OptionalNode;
-
   size_t nCsMaxPackets = DEFAULT_CS_MAX_PACKETS;
-  OptionalNode csMaxPacketsNode = section.get_child_optional("cs_max_packets");
+  OptionalConfigSection csMaxPacketsNode = section.get_child_optional("cs_max_packets");
   if (csMaxPacketsNode) {
     nCsMaxPackets = ConfigFile::parseNumber<size_t>(*csMaxPacketsNode, "cs_max_packets", "tables");
   }
 
+  unique_ptr<cs::Policy> csPolicy;
+  OptionalConfigSection csPolicyNode = section.get_child_optional("cs_policy");
+  if (csPolicyNode) {
+    std::string policyName = csPolicyNode->get_value<std::string>();
+    csPolicy = cs::Policy::create(policyName);
+    if (csPolicy == nullptr) {
+      BOOST_THROW_EXCEPTION(ConfigFile::Error(
+        "Unknown cs_policy \"" + policyName + "\" in \"tables\" section"));
+    }
+  }
+
   unique_ptr<fw::UnsolicitedDataPolicy> unsolicitedDataPolicy;
-  OptionalNode unsolicitedDataPolicyNode = section.get_child_optional("cs_unsolicited_policy");
+  OptionalConfigSection unsolicitedDataPolicyNode = section.get_child_optional("cs_unsolicited_policy");
   if (unsolicitedDataPolicyNode) {
-    std::string policyKey = unsolicitedDataPolicyNode->get_value<std::string>();
-    unsolicitedDataPolicy = fw::UnsolicitedDataPolicy::create(policyKey);
+    std::string policyName = unsolicitedDataPolicyNode->get_value<std::string>();
+    unsolicitedDataPolicy = fw::UnsolicitedDataPolicy::create(policyName);
     if (unsolicitedDataPolicy == nullptr) {
       BOOST_THROW_EXCEPTION(ConfigFile::Error(
-        "Unknown cs_unsolicited_policy \"" + policyKey + "\" in \"tables\" section"));
+        "Unknown cs_unsolicited_policy \"" + policyName + "\" in \"tables\" section"));
     }
   }
   else {
     unsolicitedDataPolicy = make_unique<fw::DefaultUnsolicitedDataPolicy>();
   }
 
-  OptionalNode strategyChoiceSection = section.get_child_optional("strategy_choice");
+  OptionalConfigSection strategyChoiceSection = section.get_child_optional("strategy_choice");
   if (strategyChoiceSection) {
     processStrategyChoiceSection(*strategyChoiceSection, isDryRun);
   }
 
-  OptionalNode networkRegionSection = section.get_child_optional("network_region");
+  OptionalConfigSection networkRegionSection = section.get_child_optional("network_region");
   if (networkRegionSection) {
     processNetworkRegionSection(*networkRegionSection, isDryRun);
   }
@@ -94,7 +105,11 @@ TablesConfigSection::processConfig(const ConfigSection& section, bool isDryRun)
     return;
   }
 
-  m_forwarder.getCs().setLimit(nCsMaxPackets);
+  Cs& cs = m_forwarder.getCs();
+  cs.setLimit(nCsMaxPackets);
+  if (cs.size() == 0 && csPolicy != nullptr) {
+    cs.setPolicy(std::move(csPolicy));
+  }
 
   m_forwarder.setUnsolicitedDataPolicy(std::move(unsolicitedDataPolicy));
 
@@ -104,15 +119,14 @@ TablesConfigSection::processConfig(const ConfigSection& section, bool isDryRun)
 void
 TablesConfigSection::processStrategyChoiceSection(const ConfigSection& section, bool isDryRun)
 {
-  StrategyChoice& sc = m_forwarder.getStrategyChoice();
+  using fw::Strategy;
 
   std::map<Name, Name> choices;
-
   for (const auto& prefixAndStrategy : section) {
     Name prefix(prefixAndStrategy.first);
     Name strategy(prefixAndStrategy.second.get_value<std::string>());
 
-    if (!sc.hasStrategy(strategy)) {
+    if (!Strategy::canCreate(strategy)) {
       BOOST_THROW_EXCEPTION(ConfigFile::Error(
         "Unknown strategy \"" + prefixAndStrategy.second.get_value<std::string>() +
         "\" for prefix \"" + prefix.toUri() + "\" in \"strategy_choice\" section"));
@@ -129,6 +143,7 @@ TablesConfigSection::processStrategyChoiceSection(const ConfigSection& section, 
     return;
   }
 
+  StrategyChoice& sc = m_forwarder.getStrategyChoice();
   for (const auto& prefixAndStrategy : choices) {
     if (!sc.insert(prefixAndStrategy.first, prefixAndStrategy.second)) {
       BOOST_THROW_EXCEPTION(ConfigFile::Error(
@@ -136,6 +151,7 @@ TablesConfigSection::processStrategyChoiceSection(const ConfigSection& section, 
         "prefix \"" + prefixAndStrategy.first.toUri() + "\" in \"strategy_choicev\""));
     }
   }
+  ///\todo redesign so that strategy parameter errors can be catched during dry-run
 }
 
 void

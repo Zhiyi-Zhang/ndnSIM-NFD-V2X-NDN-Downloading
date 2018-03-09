@@ -22,7 +22,7 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
     <xsl:variable name="version">
       <xsl:apply-templates select="nfd:nfdStatus/nfd:generalStatus/nfd:version"/>
     </xsl:variable>
-    <span class="grey">Powered by </span><a target="_blank" href="http://named-data.net/doc/NFD/"><span class="green">NFD version <xsl:value-of select="$version"/></span></a><span class="grey">.</span>
+    <span class="grey">Powered by </span><a target="_blank" href="https://named-data.net/doc/NFD/"><span class="green">NFD version <xsl:value-of select="$version"/></span></a><span class="grey">.</span>
   </footer>
   </body>
   </html>
@@ -36,7 +36,26 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
 
 <xsl:template name="formatDuration">
   <xsl:param name="duration" />
-  <xsl:variable name="seconds"><xsl:value-of select="substring($duration, 3, string-length($duration)-3)" /></xsl:variable>
+  <xsl:variable name="milliseconds">
+    <xsl:choose>
+      <xsl:when test="contains($duration, '.')">
+        <xsl:value-of select="substring($duration, string-length($duration)-4, 3)" />
+      </xsl:when>
+      <xsl:otherwise>
+        0
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:variable>
+  <xsl:variable name="seconds">
+    <xsl:choose>
+      <xsl:when test="contains($duration, '.')">
+        <xsl:value-of select="substring($duration, 3, string-length($duration)-7)" />
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:value-of select="substring($duration, 3, string-length($duration)-3)" />
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:variable>
   <xsl:variable name="days"><xsl:value-of select="floor($seconds div 86400)" /></xsl:variable>
   <xsl:variable name="hours"><xsl:value-of select="floor($seconds div 3600)" /></xsl:variable>
   <xsl:variable name="minutes"><xsl:value-of select="floor($seconds div 60)" /></xsl:variable>
@@ -65,6 +84,12 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
     <xsl:otherwise>
       <xsl:value-of select="$seconds"/> seconds
     </xsl:otherwise>
+    <xsl:when test="$milliseconds > 1">
+      <xsl:value-of select="$milliseconds"/> milliseconds
+    </xsl:when>
+    <xsl:when test="$milliseconds = 1">
+      <xsl:value-of select="$milliseconds"/> millisecond
+    </xsl:when>
   </xsl:choose>
 </xsl:template>
 
@@ -73,7 +98,6 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
   <table class="item-list">
     <thead>
       <tr>
-        <th>NFD ID</th>
         <th>Version</th>
         <th>Start time</th>
         <th>Current time</th>
@@ -93,7 +117,6 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
     </thead>
     <tbody>
       <tr class="center">
-        <td><xsl:apply-templates select="nfd:nfdId"/></td>
         <td><xsl:value-of select="nfd:version"/></td>
         <td><xsl:call-template name="formatDate"><xsl:with-param name="date" select="nfd:startTime" /></xsl:call-template></td>
         <td><xsl:call-template name="formatDate"><xsl:with-param name="date" select="nfd:currentTime" /></xsl:call-template></td>
@@ -105,8 +128,8 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
         <td><xsl:value-of select="nfd:nCsEntries"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nInterests"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nInterests"/></td>
-        <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nDatas"/></td>
-        <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nDatas"/></td>
+        <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nData"/></td>
+        <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nData"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nNacks"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nNacks"/></td>
       </tr>
@@ -185,6 +208,12 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
             <xsl:when test="nfd:flags/nfd:localFieldsEnabled">
               local-fields
             </xsl:when>
+            <xsl:when test="nfd:flags/nfd:lpReliabilityEnabled">
+              reliability
+            </xsl:when>
+            <xsl:when test="nfd:flags/nfd:congestionMarkingEnabled">
+              congestion-marking
+            </xsl:when>
           </xsl:choose>
         </td>
         <td>
@@ -198,11 +227,11 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
           </xsl:choose>
         </td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nInterests"/></td>
-        <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nDatas"/></td>
+        <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nData"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:incomingPackets/nfd:nNacks"/></td>
         <td><xsl:value-of select="nfd:byteCounters/nfd:incomingBytes"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nInterests"/></td>
-        <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nDatas"/></td>
+        <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nData"/></td>
         <td><xsl:value-of select="nfd:packetCounters/nfd:outgoingPackets/nfd:nNacks"/></td>
         <td><xsl:value-of select="nfd:byteCounters/nfd:outgoingBytes"/></td>
       </tr>
@@ -334,6 +363,24 @@ xmlns:nfd="ndn:/localhost/nfd/status/1">
         </td>
       </tr>
       </xsl:for-each>
+    </tbody>
+  </table>
+</xsl:template>
+
+<xsl:template match="nfd:cs">
+  <h2>CS Information</h2>
+  <table class="item-list">
+    <thead>
+      <tr>
+        <th>Hits</th>
+        <th>Misses</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="center">
+        <td><xsl:value-of select="nfd:nHits"/></td>
+        <td><xsl:value-of select="nfd:nMisses"/></td>
+      </tr>
     </tbody>
   </table>
 </xsl:template>

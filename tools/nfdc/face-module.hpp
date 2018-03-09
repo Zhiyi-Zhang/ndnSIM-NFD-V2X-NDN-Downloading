@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,6 +27,8 @@
 #define NFD_TOOLS_NFDC_FACE_MODULE_HPP
 
 #include "module.hpp"
+#include "command-parser.hpp"
+#include "format-helpers.hpp"
 
 namespace nfd {
 namespace tools {
@@ -40,13 +42,38 @@ using ndn::nfd::FaceStatus;
 class FaceModule : public Module, noncopyable
 {
 public:
-  virtual void
+  /** \brief register 'face list', 'face show', 'face create', 'face destroy' commands
+   */
+  static void
+  registerCommands(CommandParser& parser);
+
+  /** \brief the 'face list' command
+   */
+  static void
+  list(ExecuteContext& ctx);
+
+  /** \brief the 'face show' command
+   */
+  static void
+  show(ExecuteContext& ctx);
+
+  /** \brief the 'face create' command
+   */
+  static void
+  create(ExecuteContext& ctx);
+
+  /** \brief the 'face destroy' command
+   */
+  static void
+  destroy(ExecuteContext& ctx);
+
+  void
   fetchStatus(Controller& controller,
               const function<void()>& onSuccess,
               const Controller::DatasetFailCallback& onFailure,
               const CommandOptions& options) override;
 
-  virtual void
+  void
   formatStatusXml(std::ostream& os) const override;
 
   /** \brief format a single status item as XML
@@ -56,15 +83,24 @@ public:
   void
   formatItemXml(std::ostream& os, const FaceStatus& item) const;
 
-  virtual void
+  void
   formatStatusText(std::ostream& os) const override;
 
   /** \brief format a single status item as text
    *  \param os output stream
    *  \param item status item
+   *  \param wantMultiLine use multi-line style
    */
-  void
-  formatItemText(std::ostream& os, const FaceStatus& item) const;
+  static void
+  formatItemText(std::ostream& os, const FaceStatus& item, bool wantMultiLine);
+
+  /** \brief print face response parameters to specified ostream
+   *  \param os output stream
+   *  \param ia ItemAttributes used to format output
+   *  \param resp response control parameters to print
+   */
+  static void
+  printFaceParams(std::ostream& os, text::ItemAttributes& ia, const ControlParameters& resp);
 
 private:
   std::vector<FaceStatus> m_status;

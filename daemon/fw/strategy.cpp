@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,19 +25,122 @@
 
 #include "strategy.hpp"
 #include "forwarder.hpp"
-#include "algorithm.hpp"
 #include "core/logger.hpp"
 #include "core/random.hpp"
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/algorithm/copy.hpp>
 
 namespace nfd {
 namespace fw {
 
 NFD_LOG_INIT("Strategy");
 
-Strategy::Strategy(Forwarder& forwarder, const Name& name)
+Strategy::Registry&
+Strategy::getRegistry()
+{
+  static Registry registry;
+  return registry;
+}
+
+Strategy::Registry::const_iterator
+Strategy::find(const Name& instanceName)
+{
+  const Registry& registry = getRegistry();
+  ParsedInstanceName parsed = parseInstanceName(instanceName);
+
+  if (parsed.version) {
+    // specified version: find exact or next higher version
+
+    auto found = registry.lower_bound(parsed.strategyName);
+    if (found != registry.end()) {
+      if (parsed.strategyName.getPrefix(-1).isPrefixOf(found->first)) {
+        NFD_LOG_TRACE("find " << instanceName << " versioned found=" << found->first);
+        return found;
+      }
+    }
+
+    NFD_LOG_TRACE("find " << instanceName << " versioned not-found");
+    return registry.end();
+  }
+
+  // no version specified: find highest version
+
+  if (!parsed.strategyName.empty()) { // Name().getSuccessor() would be invalid
+    auto found = registry.lower_bound(parsed.strategyName.getSuccessor());
+    if (found != registry.begin()) {
+      --found;
+      if (parsed.strategyName.isPrefixOf(found->first)) {
+        NFD_LOG_TRACE("find " << instanceName << " unversioned found=" << found->first);
+        return found;
+      }
+    }
+  }
+
+  NFD_LOG_TRACE("find " << instanceName << " unversioned not-found");
+  return registry.end();
+}
+
+bool
+Strategy::canCreate(const Name& instanceName)
+{
+  return Strategy::find(instanceName) != getRegistry().end();
+}
+
+unique_ptr<Strategy>
+Strategy::create(const Name& instanceName, Forwarder& forwarder)
+{
+  auto found = Strategy::find(instanceName);
+  if (found == getRegistry().end()) {
+    NFD_LOG_DEBUG("create " << instanceName << " not-found");
+    return nullptr;
+  }
+
+  unique_ptr<Strategy> instance = found->second(forwarder, instanceName);
+  NFD_LOG_DEBUG("create " << instanceName << " found=" << found->first <<
+                " created=" << instance->getInstanceName());
+  BOOST_ASSERT(!instance->getInstanceName().empty());
+  return instance;
+}
+
+bool
+Strategy::areSameType(const Name& instanceNameA, const Name& instanceNameB)
+{
+  return Strategy::find(instanceNameA) == Strategy::find(instanceNameB);
+}
+
+std::set<Name>
+Strategy::listRegistered()
+{
+  std::set<Name> strategyNames;
+  boost::copy(getRegistry() | boost::adaptors::map_keys,
+              std::inserter(strategyNames, strategyNames.end()));
+  return strategyNames;
+}
+
+Strategy::ParsedInstanceName
+Strategy::parseInstanceName(const Name& input)
+{
+  for (ssize_t i = input.size() - 1; i > 0; --i) {
+    if (input[i].isVersion()) {
+      return {input.getPrefix(i + 1), input[i].toVersion(), input.getSubName(i + 1)};
+    }
+  }
+  return {input, ndn::nullopt, PartialName()};
+}
+
+Name
+Strategy::makeInstanceName(const Name& input, const Name& strategyName)
+{
+  BOOST_ASSERT(strategyName.at(-1).isVersion());
+
+  bool hasVersion = std::any_of(input.rbegin(), input.rend(),
+                                [] (const name::Component& comp) { return comp.isVersion(); });
+  return hasVersion ? input : Name(input).append(strategyName.at(-1));
+}
+
+Strategy::Strategy(Forwarder& forwarder)
   : afterAddFace(forwarder.getFaceTable().afterAdd)
   , beforeRemoveFace(forwarder.getFaceTable().beforeRemove)
-  , m_name(name)
   , m_forwarder(forwarder)
   , m_measurements(m_forwarder.getMeasurements(), m_forwarder.getStrategyChoice(), *this)
 {
@@ -68,39 +171,9 @@ Strategy::afterReceiveNack(const Face& inFace, const lp::Nack& nack,
 }
 
 void
-Strategy::sendInterest(const shared_ptr<pit::Entry>& pitEntry, Face& outFace,
-                       bool wantNewNonce)
+Strategy::onDroppedInterest(const Face& outFace, const Interest& interest)
 {
-  // scope control
-  if (fw::violatesScope(*pitEntry, outFace)) {
-    NFD_LOG_DEBUG("sendInterestLegacy face=" << outFace.getId() <<
-                  " interest=" << pitEntry->getName() << " violates scope");
-    return;
-  }
-
-  // pick Interest
-  // The outgoing Interest picked is the last incoming Interest that does not come from outFace.
-  // If all in-records come from outFace, it's fine to pick that.
-  // This happens when there's only one in-record that comes from outFace.
-  // The legit use is for vehicular network; otherwise, strategy shouldn't send to the sole inFace.
-  pit::InRecordCollection::iterator pickedInRecord = std::max_element(
-    pitEntry->in_begin(), pitEntry->in_end(),
-    [&outFace] (const pit::InRecord& a, const pit::InRecord& b) {
-      bool isOutFaceA = &a.getFace() == &outFace;
-      bool isOutFaceB = &b.getFace() == &outFace;
-      return (isOutFaceA > isOutFaceB) ||
-             (isOutFaceA == isOutFaceB && a.getLastRenewed() < b.getLastRenewed());
-    });
-  BOOST_ASSERT(pickedInRecord != pitEntry->in_end());
-  auto interest = const_pointer_cast<Interest>(pickedInRecord->getInterest().shared_from_this());
-
-  if (wantNewNonce) {
-    interest = make_shared<Interest>(*interest);
-    static std::uniform_int_distribution<uint32_t> dist;
-    interest->setNonce(dist(getGlobalRng()));
-  }
-
-  this->sendInterest(pitEntry, outFace, *interest);
+  NFD_LOG_DEBUG("onDroppedInterest outFace=" << outFace.getId() << " name=" << interest.getName());
 }
 
 void
@@ -129,62 +202,38 @@ const fib::Entry&
 Strategy::lookupFib(const pit::Entry& pitEntry) const
 {
   const Fib& fib = m_forwarder.getFib();
-  const NetworkRegionTable& nrt = m_forwarder.getNetworkRegionTable();
 
   const Interest& interest = pitEntry.getInterest();
-  // has Link object?
-  if (!interest.hasLink()) {
+  // has forwarding hint?
+  if (interest.getForwardingHint().empty()) {
     // FIB lookup with Interest name
     const fib::Entry& fibEntry = fib.findLongestPrefixMatch(pitEntry);
-    NFD_LOG_TRACE("lookupFib noLinkObject found=" << fibEntry.getPrefix());
+    NFD_LOG_TRACE("lookupFib noForwardingHint found=" << fibEntry.getPrefix());
     return fibEntry;
   }
 
-  const Link& link = interest.getLink();
+  const DelegationList& fh = interest.getForwardingHint();
+  // Forwarding hint should have been stripped by incoming Interest pipeline when reaching producer region
+  BOOST_ASSERT(!m_forwarder.getNetworkRegionTable().isInProducerRegion(fh));
 
-  // in producer region?
-  if (nrt.isInProducerRegion(link)) {
-    // FIB lookup with Interest name
-    const fib::Entry& fibEntry = fib.findLongestPrefixMatch(pitEntry);
-    NFD_LOG_TRACE("lookupFib inProducerRegion found=" << fibEntry.getPrefix());
-    return fibEntry;
-  }
-
-  // has SelectedDelegation?
-  if (interest.hasSelectedDelegation()) {
-    // FIB lookup with SelectedDelegation
-    Name selectedDelegation = interest.getSelectedDelegation();
-    const fib::Entry& fibEntry = fib.findLongestPrefixMatch(selectedDelegation);
-    NFD_LOG_TRACE("lookupFib hasSelectedDelegation=" << selectedDelegation << " found=" << fibEntry.getPrefix());
-    return fibEntry;
-  }
-
-  // FIB lookup with first delegation Name
-  const fib::Entry& fibEntry0 = fib.findLongestPrefixMatch(link.getDelegations().begin()->second);
-  // in default-free zone?
-  bool isDefaultFreeZone = !(fibEntry0.getPrefix().size() == 0 && fibEntry0.hasNextHops());
-  if (!isDefaultFreeZone) {
-    NFD_LOG_TRACE("lookupFib inConsumerRegion found=" << fibEntry0.getPrefix());
-    return fibEntry0;
-  }
-
-  // choose and set SelectedDelegation
-  for (const std::pair<uint32_t, Name>& delegation : link.getDelegations()) {
-    const Name& delegationName = delegation.second;
-    const fib::Entry& fibEntry = fib.findLongestPrefixMatch(delegationName);
-    if (fibEntry.hasNextHops()) {
-      /// \todo Don't modify in-record Interests.
-      ///       Set SelectedDelegation in outgoing Interest pipeline.
-      std::for_each(pitEntry.in_begin(), pitEntry.in_end(),
-        [&delegationName] (const pit::InRecord& inR) {
-          const_cast<Interest&>(inR.getInterest()).setSelectedDelegation(delegationName);
-        });
-      NFD_LOG_TRACE("lookupFib enterDefaultFreeZone setSelectedDelegation=" << delegationName);
-      return fibEntry;
+  const fib::Entry* fibEntry = nullptr;
+  for (const Delegation& del : fh) {
+    fibEntry = &fib.findLongestPrefixMatch(del.name);
+    if (fibEntry->hasNextHops()) {
+      if (fibEntry->getPrefix().size() == 0) {
+        // in consumer region, return the default route
+        NFD_LOG_TRACE("lookupFib inConsumerRegion found=" << fibEntry->getPrefix());
+      }
+      else {
+        // in default-free zone, use the first delegation that finds a FIB entry
+        NFD_LOG_TRACE("lookupFib delegation=" << del.name << " found=" << fibEntry->getPrefix());
+      }
+      return *fibEntry;
     }
+    BOOST_ASSERT(fibEntry->getPrefix().size() == 0); // only ndn:/ FIB entry can have zero nexthop
   }
-  BOOST_ASSERT(false);
-  return fibEntry0;
+  BOOST_ASSERT(fibEntry != nullptr && fibEntry->getPrefix().size() == 0);
+  return *fibEntry; // only occurs if no delegation finds a FIB nexthop
 }
 
 } // namespace fw

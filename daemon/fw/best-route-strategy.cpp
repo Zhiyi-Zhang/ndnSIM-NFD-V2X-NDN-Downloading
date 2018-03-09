@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -29,17 +29,14 @@
 namespace nfd {
 namespace fw {
 
-const Name BestRouteStrategy::STRATEGY_NAME("ndn:/localhost/nfd/strategy/best-route/%FD%01");
-NFD_REGISTER_STRATEGY(BestRouteStrategy);
-
-BestRouteStrategy::BestRouteStrategy(Forwarder& forwarder, const Name& name)
-  : Strategy(forwarder, name)
+BestRouteStrategyBase::BestRouteStrategyBase(Forwarder& forwarder)
+  : Strategy(forwarder)
 {
 }
 
 void
-BestRouteStrategy::afterReceiveInterest(const Face& inFace, const Interest& interest,
-                                        const shared_ptr<pit::Entry>& pitEntry)
+BestRouteStrategyBase::afterReceiveInterest(const Face& inFace, const Interest& interest,
+                                            const shared_ptr<pit::Entry>& pitEntry)
 {
   if (hasPendingOutRecords(*pitEntry)) {
     // not a new Interest, don't forward
@@ -59,6 +56,29 @@ BestRouteStrategy::afterReceiveInterest(const Face& inFace, const Interest& inte
   }
 
   this->rejectPendingInterest(pitEntry);
+}
+
+NFD_REGISTER_STRATEGY(BestRouteStrategy);
+
+BestRouteStrategy::BestRouteStrategy(Forwarder& forwarder, const Name& name)
+  : BestRouteStrategyBase(forwarder)
+{
+  ParsedInstanceName parsed = parseInstanceName(name);
+  if (!parsed.parameters.empty()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument("BestRouteStrategy does not accept parameters"));
+  }
+  if (parsed.version && *parsed.version != getStrategyName()[-1].toVersion()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument(
+      "BestRouteStrategy does not support version " + to_string(*parsed.version)));
+  }
+  this->setInstanceName(makeInstanceName(name, getStrategyName()));
+}
+
+const Name&
+BestRouteStrategy::getStrategyName()
+{
+  static Name strategyName("/localhost/nfd/strategy/best-route/%FD%01");
+  return strategyName;
 }
 
 } // namespace fw

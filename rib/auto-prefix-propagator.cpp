@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,6 +26,9 @@
 #include "auto-prefix-propagator.hpp"
 #include "core/logger.hpp"
 #include "core/scheduler.hpp"
+#include <ndn-cxx/security/pib/identity.hpp>
+#include <ndn-cxx/security/pib/identity-container.hpp>
+#include <ndn-cxx/security/pib/pib.hpp>
 #include <ndn-cxx/security/signing-helpers.hpp>
 #include <vector>
 
@@ -121,20 +124,18 @@ AutoPrefixPropagator::disable()
 AutoPrefixPropagator::PrefixPropagationParameters
 AutoPrefixPropagator::getPrefixPropagationParameters(const Name& localRibPrefix)
 {
-  // get all identities from the KeyChain
-  std::vector<Name> identities;
-  m_keyChain.getAllIdentities(identities, false); // get all except the default
-  identities.push_back(m_keyChain.getDefaultIdentity()); // get the default
-
   // shortest prefix matching to all identies.
-  Name propagatedPrefix, signingIdentity;
+  Name propagatedPrefix;
+  ndn::security::pib::Identity signingIdentity;
   bool isFound = false;
-  for (auto&& i : identities) {
-    Name prefix = !i.empty() && IGNORE_COMMPONENT == i.at(-1) ? i.getPrefix(-1) : i;
-    if (prefix.isPrefixOf(localRibPrefix) && (!isFound || i.size() < signingIdentity.size())) {
+  for (auto&& identity : m_keyChain.getPib().getIdentities()) {
+    Name idName = identity.getName();
+    Name prefix = !idName.empty() && IGNORE_COMMPONENT == idName.at(-1) ?
+                  idName.getPrefix(-1) : idName;
+    if (prefix.isPrefixOf(localRibPrefix) && (!isFound || prefix.size() < propagatedPrefix.size())) {
       isFound = true;
       propagatedPrefix = prefix;
-      signingIdentity = i;
+      signingIdentity = identity;
     }
   }
 
@@ -147,7 +148,7 @@ AutoPrefixPropagator::getPrefixPropagationParameters(const Name& localRibPrefix)
     propagateParameters.parameters = m_controlParameters;
     propagateParameters.options = m_commandOptions;
     propagateParameters.parameters.setName(propagatedPrefix);
-    propagateParameters.options.setSigningInfo(signingByIdentity(signingIdentity));
+    propagateParameters.options.setSigningInfo(ndn::security::signingByIdentity(signingIdentity));
   }
 
   return propagateParameters;
@@ -177,9 +178,15 @@ AutoPrefixPropagator::afterInsertRibEntry(const Name& prefix)
   auto entryIt = m_propagatedEntries.find(propagateParameters.parameters.getName());
   if (entryIt != m_propagatedEntries.end()) {
     // in addition to PROPAGATED and PROPAGATE_FAIL, the state may also be NEW,
-    // if its propagation was suspended because there was no connectivity to the Hub.
-    NFD_LOG_INFO("prefix has already been propagated: "
-                 << propagateParameters.parameters.getName());
+    // if there is no hub connected to propagate this prefix.
+    if (entryIt->second.isNew()) {
+      NFD_LOG_INFO("no hub connected to propagate "
+                   << propagateParameters.parameters.getName());
+    }
+    else {
+      NFD_LOG_INFO("prefix has already been propagated: "
+                   << propagateParameters.parameters.getName());
+    }
     return;
   }
 
@@ -272,9 +279,9 @@ AutoPrefixPropagator::advertise(const ControlParameters& parameters,
 {
   NFD_LOG_INFO("advertise " << parameters.getName());
 
-  ndn::Scheduler::Event refreshEvent =
+  scheduler::EventCallback refreshEvent =
     bind(&AutoPrefixPropagator::onRefreshTimer, this, parameters, options);
-  ndn::Scheduler::Event retryEvent =
+  scheduler::EventCallback retryEvent =
     bind(&AutoPrefixPropagator::onRetryTimer, this, parameters, options,
          std::min(m_maxRetryWait, retryWaitTime * 2));
 
@@ -381,7 +388,7 @@ AutoPrefixPropagator::afterHubDisconnect()
 void
 AutoPrefixPropagator::afterPropagateSucceed(const ControlParameters& parameters,
                                             const CommandOptions& options,
-                                            const ndn::Scheduler::Event& refreshEvent)
+                                            const scheduler::EventCallback& refreshEvent)
 {
   NFD_LOG_TRACE("success to propagate " << parameters.getName());
 
@@ -403,7 +410,7 @@ AutoPrefixPropagator::afterPropagateFail(const ndn::nfd::ControlResponse& respon
                                          const ControlParameters& parameters,
                                          const CommandOptions& options,
                                          time::seconds retryWaitTime,
-                                         const ndn::Scheduler::Event& retryEvent)
+                                         const scheduler::EventCallback& retryEvent)
 {
   NFD_LOG_TRACE("fail to propagate " << parameters.getName()
                                      << "\n\t reason:" << response.getText()

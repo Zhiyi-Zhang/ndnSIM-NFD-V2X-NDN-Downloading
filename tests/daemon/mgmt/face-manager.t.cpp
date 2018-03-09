@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,16 +25,16 @@
 
 #include "mgmt/face-manager.hpp"
 #include "core/random.hpp"
-#include "face/tcp-factory.hpp"
-#include "face/udp-factory.hpp"
+#include "face/protocol-factory.hpp"
 
 #include "nfd-manager-common-fixture.hpp"
 #include "../face/dummy-face.hpp"
 #include "../face/dummy-transport.hpp"
 
 #include <ndn-cxx/encoding/tlv.hpp>
+#include <ndn-cxx/encoding/tlv-nfd.hpp>
 #include <ndn-cxx/mgmt/nfd/channel-status.hpp>
-#include <ndn-cxx/mgmt/nfd/face-event-notification.hpp>
+#include <ndn-cxx/net/network-monitor-stub.hpp>
 
 namespace nfd {
 namespace tests {
@@ -44,7 +44,8 @@ class FaceManagerFixture : public NfdManagerCommonFixture
 public:
   FaceManagerFixture()
     : m_faceTable(m_forwarder.getFaceTable())
-    , m_manager(m_faceTable, m_dispatcher, *m_authenticator)
+    , m_faceSystem(m_faceTable, make_shared<ndn::net::NetworkMonitorStub>(0))
+    , m_manager(m_faceSystem, m_dispatcher, *m_authenticator)
   {
     setTopPrefix();
     setPrivilege("faces");
@@ -55,14 +56,14 @@ public:
     REMOVE_LAST_NOTIFICATION = 1 << 0,
     SET_SCOPE_LOCAL          = 1 << 1,
     SET_URI_TEST             = 1 << 2,
-    RANDOMIZE_COUNTERS       = 1 << 3
+    RANDOMIZE_COUNTERS       = 1 << 3,
   };
 
   /** \brief adds a face to the FaceTable
    *  \param options bitwise OR'ed AddFaceFlags
    */
   shared_ptr<Face>
-  addFace(int flags = 0)
+  addFace(unsigned int flags = 0)
   {
     std::string uri = "dummy://";
     ndn::nfd::FaceScope scope = ndn::nfd::FACE_SCOPE_NON_LOCAL;
@@ -101,7 +102,7 @@ public:
 
 private:
   template<typename T>
-  static typename std::enable_if<std::is_base_of<SimpleCounter, T>::value>::type
+  static void
   randomizeCounter(const T& counter)
   {
     static std::uniform_int_distribution<typename T::rep> dist;
@@ -110,6 +111,7 @@ private:
 
 protected:
   FaceTable& m_faceTable;
+  FaceSystem m_faceSystem;
   FaceManager m_manager;
 };
 
@@ -123,14 +125,13 @@ BOOST_AUTO_TEST_CASE(Existing)
   auto addedFace = addFace(REMOVE_LAST_NOTIFICATION | SET_SCOPE_LOCAL); // clear notification for creation
 
   auto parameters = ControlParameters().setFaceId(addedFace->getId());
-  auto command = makeControlCommandRequest("/localhost/nfd/faces/destroy", parameters);
-
-  receiveInterest(command);
+  auto req = makeControlCommandRequest("/localhost/nfd/faces/destroy", parameters);
+  receiveInterest(req);
 
   BOOST_REQUIRE_EQUAL(m_responses.size(), 2); // one response and one notification
   // notification is already tested, so ignore it
 
-  BOOST_CHECK_EQUAL(checkResponse(1, command->getName(), makeResponse(200, "OK", parameters)),
+  BOOST_CHECK_EQUAL(checkResponse(1, req.getName(), makeResponse(200, "OK", parameters)),
                     CheckResponseResult::OK);
 
   BOOST_CHECK_EQUAL(addedFace->getId(), face::INVALID_FACEID);
@@ -139,13 +140,11 @@ BOOST_AUTO_TEST_CASE(Existing)
 BOOST_AUTO_TEST_CASE(NonExisting)
 {
   auto parameters = ControlParameters().setFaceId(65535);
-  auto command = makeControlCommandRequest("/localhost/nfd/faces/destroy", parameters);
-
-  receiveInterest(command);
+  auto req = makeControlCommandRequest("/localhost/nfd/faces/destroy", parameters);
+  receiveInterest(req);
 
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
-
-  BOOST_CHECK_EQUAL(checkResponse(0, command->getName(), makeResponse(200, "OK", parameters)),
+  BOOST_CHECK_EQUAL(checkResponse(0, req.getName(), makeResponse(200, "OK", parameters)),
                     CheckResponseResult::OK);
 }
 
@@ -155,24 +154,20 @@ BOOST_AUTO_TEST_SUITE(Datasets)
 
 BOOST_AUTO_TEST_CASE(FaceDataset)
 {
-  size_t nEntries = 303;
+  const size_t nEntries = 303;
   for (size_t i = 0; i < nEntries; ++i) {
     addFace(REMOVE_LAST_NOTIFICATION | SET_URI_TEST | RANDOMIZE_COUNTERS);
   }
 
-  receiveInterest(makeInterest("/localhost/nfd/faces/list"));
+  receiveInterest(Interest("/localhost/nfd/faces/list"));
 
-  Block content;
-  BOOST_CHECK_NO_THROW(content = concatenateResponses());
-  BOOST_CHECK_NO_THROW(content.parse());
+  Block content = concatenateResponses();
+  content.parse();
   BOOST_REQUIRE_EQUAL(content.elements().size(), nEntries);
 
   std::set<FaceId> faceIds;
   for (size_t idx = 0; idx < nEntries; ++idx) {
-    BOOST_TEST_MESSAGE("processing element: " << idx);
-
-    ndn::nfd::FaceStatus decodedStatus;
-    BOOST_REQUIRE_NO_THROW(decodedStatus.wireDecode(content.elements()[idx]));
+    ndn::nfd::FaceStatus decodedStatus(content.elements()[idx]);
     BOOST_CHECK(m_faceTable.get(decodedStatus.getFaceId()) != nullptr);
     faceIds.insert(decodedStatus.getFaceId());
   }
@@ -183,27 +178,26 @@ BOOST_AUTO_TEST_CASE(FaceDataset)
 
 BOOST_AUTO_TEST_CASE(FaceQuery)
 {
+  using ndn::nfd::FaceQueryFilter;
+
   auto face1 = addFace(REMOVE_LAST_NOTIFICATION); // dummy://
   auto face2 = addFace(REMOVE_LAST_NOTIFICATION | SET_SCOPE_LOCAL); // dummy://, local
   auto face3 = addFace(REMOVE_LAST_NOTIFICATION | SET_URI_TEST); // test://
 
-  auto generateQueryName = [] (const ndn::nfd::FaceQueryFilter& filter) {
+  auto generateQueryName = [] (const FaceQueryFilter& filter) {
     return Name("/localhost/nfd/faces/query").append(filter.wireEncode());
   };
 
-  auto querySchemeName =
-    generateQueryName(ndn::nfd::FaceQueryFilter().setUriScheme("dummy"));
-  auto queryIdName =
-    generateQueryName(ndn::nfd::FaceQueryFilter().setFaceId(face1->getId()));
-  auto queryScopeName =
-    generateQueryName(ndn::nfd::FaceQueryFilter().setFaceScope(ndn::nfd::FACE_SCOPE_NON_LOCAL));
-  auto invalidQueryName =
-    Name("/localhost/nfd/faces/query").append(ndn::makeStringBlock(tlv::Content, "invalid"));
+  auto querySchemeName = generateQueryName(FaceQueryFilter().setUriScheme("dummy"));
+  auto queryIdName = generateQueryName(FaceQueryFilter().setFaceId(face1->getId()));
+  auto queryScopeName = generateQueryName(FaceQueryFilter().setFaceScope(ndn::nfd::FACE_SCOPE_NON_LOCAL));
+  auto invalidQueryName = Name("/localhost/nfd/faces/query")
+                          .append(ndn::makeStringBlock(tlv::Content, "invalid"));
 
-  receiveInterest(makeInterest(querySchemeName)); // face1 and face2 expected
-  receiveInterest(makeInterest(queryIdName)); // face1 expected
-  receiveInterest(makeInterest(queryScopeName)); // face1 and face3 expected
-  receiveInterest(makeInterest(invalidQueryName)); // nack expected
+  receiveInterest(Interest(querySchemeName)); // face1 and face2 expected
+  receiveInterest(Interest(queryIdName)); // face1 expected
+  receiveInterest(Interest(queryScopeName)); // face1 and face3 expected
+  receiveInterest(Interest(invalidQueryName)); // nack expected
 
   BOOST_REQUIRE_EQUAL(m_responses.size(), 4);
 
@@ -211,25 +205,25 @@ BOOST_AUTO_TEST_CASE(FaceQuery)
   ndn::nfd::FaceStatus status;
 
   content = m_responses[0].getContent();
-  BOOST_CHECK_NO_THROW(content.parse());
+  content.parse();
   BOOST_CHECK_EQUAL(content.elements().size(), 2); // face1 and face2
-  BOOST_CHECK_NO_THROW(status.wireDecode(content.elements()[0]));
+  status.wireDecode(content.elements()[0]);
   BOOST_CHECK_EQUAL(face1->getId(), status.getFaceId());
-  BOOST_CHECK_NO_THROW(status.wireDecode(content.elements()[1]));
+  status.wireDecode(content.elements()[1]);
   BOOST_CHECK_EQUAL(face2->getId(), status.getFaceId());
 
   content = m_responses[1].getContent();
-  BOOST_CHECK_NO_THROW(content.parse());
+  content.parse();
   BOOST_CHECK_EQUAL(content.elements().size(), 1); // face1
-  BOOST_CHECK_NO_THROW(status.wireDecode(content.elements()[0]));
+  status.wireDecode(content.elements()[0]);
   BOOST_CHECK_EQUAL(face1->getId(), status.getFaceId());
 
   content = m_responses[2].getContent();
-  BOOST_CHECK_NO_THROW(content.parse());
+  content.parse();
   BOOST_CHECK_EQUAL(content.elements().size(), 2); // face1 and face3
-  BOOST_CHECK_NO_THROW(status.wireDecode(content.elements()[0]));
+  status.wireDecode(content.elements()[0]);
   BOOST_CHECK_EQUAL(face1->getId(), status.getFaceId());
-  BOOST_CHECK_NO_THROW(status.wireDecode(content.elements()[1]));
+  status.wireDecode(content.elements()[1]);
   BOOST_CHECK_EQUAL(face3->getId(), status.getFaceId());
 
   ControlResponse expectedResponse(400, "Malformed filter"); // nack, 400, malformed filter
@@ -237,7 +231,7 @@ BOOST_AUTO_TEST_CASE(FaceQuery)
                     CheckResponseResult::OK);
 }
 
-class TestChannel : public Channel
+class TestChannel : public face::Channel
 {
 public:
   explicit
@@ -245,21 +239,42 @@ public:
   {
     setUri(FaceUri(uri));
   }
+
+  bool
+  isListening() const final
+  {
+    return false;
+  }
+
+  size_t
+  size() const final
+  {
+    return 0;
+  }
 };
 
-class TestProtocolFactory : public ProtocolFactory
+class TestProtocolFactory : public face::ProtocolFactory
 {
 public:
-  virtual void
-  createFace(const FaceUri& uri,
-             ndn::nfd::FacePersistency persistency,
-             bool wantLocalFieldsEnabled,
-             const FaceCreatedCallback& onCreated,
-             const FaceCreationFailedCallback& onConnectFailed) final
+  TestProtocolFactory(const CtorParams& params)
+    : ProtocolFactory(params)
   {
   }
 
-  virtual std::vector<shared_ptr<const Channel>>
+  void
+  processConfig(OptionalConfigSection configSection,
+                FaceSystem::ConfigContext& context) final
+  {
+  }
+
+  void
+  createFace(const CreateFaceRequest& req,
+             const face::FaceCreatedCallback& onCreated,
+             const face::FaceCreationFailedCallback& onConnectFailed) final
+  {
+  }
+
+  std::vector<shared_ptr<const face::Channel>>
   getChannels() const final
   {
     return m_channels;
@@ -275,33 +290,30 @@ public:
   }
 
 private:
-  std::vector<shared_ptr<const Channel>> m_channels;
+  std::vector<shared_ptr<const face::Channel>> m_channels;
 };
 
 BOOST_AUTO_TEST_CASE(ChannelDataset)
 {
-  auto factory = make_shared<TestProtocolFactory>();
-  m_manager.m_factories["test"] = factory;
+  m_faceSystem.m_factories["test"] =
+    make_unique<TestProtocolFactory>(m_faceSystem.makePFCtorParams());
+  auto factory = static_cast<TestProtocolFactory*>(m_faceSystem.getFactoryById("test"));
 
+  const size_t nEntries = 404;
   std::map<std::string, shared_ptr<TestChannel>> addedChannels;
-  size_t nEntries = 404;
   for (size_t i = 0; i < nEntries; i++) {
-    auto channel = factory->addChannel("test" + boost::lexical_cast<std::string>(i) + "://");
+    auto channel = factory->addChannel("test" + to_string(i) + "://");
     addedChannels[channel->getUri().toString()] = channel;
   }
 
-  receiveInterest(makeInterest("/localhost/nfd/faces/channels"));
+  receiveInterest(Interest("/localhost/nfd/faces/channels"));
 
-  Block content;
-  BOOST_CHECK_NO_THROW(content = concatenateResponses());
-  BOOST_CHECK_NO_THROW(content.parse());
+  Block content = concatenateResponses();
+  content.parse();
   BOOST_REQUIRE_EQUAL(content.elements().size(), nEntries);
 
   for (size_t idx = 0; idx < nEntries; ++idx) {
-    BOOST_TEST_MESSAGE("processing element: " << idx);
-
-    ndn::nfd::ChannelStatus decodedStatus;
-    BOOST_CHECK_NO_THROW(decodedStatus.wireDecode(content.elements()[idx]));
+    ndn::nfd::ChannelStatus decodedStatus(content.elements()[idx]);
     BOOST_CHECK(addedChannels.find(decodedStatus.getLocalUri()) != addedChannels.end());
   }
 }
@@ -319,12 +331,10 @@ BOOST_AUTO_TEST_CASE(FaceEventCreated)
   BOOST_CHECK_EQUAL(m_manager.m_faceStateChangeConn.count(faceId), 1);
 
   // check notification
-  Block payload;
-  ndn::nfd::FaceEventNotification notification;
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
-  BOOST_CHECK_NO_THROW(payload = m_responses.back().getContent().blockFromValue());
+  Block payload = m_responses.back().getContent().blockFromValue();
   BOOST_CHECK_EQUAL(payload.type(), ndn::tlv::nfd::FaceEventNotification);
-  BOOST_CHECK_NO_THROW(notification.wireDecode(payload));
+  ndn::nfd::FaceEventNotification notification(payload);
   BOOST_CHECK_EQUAL(notification.getKind(), ndn::nfd::FACE_EVENT_CREATED);
   BOOST_CHECK_EQUAL(notification.getFaceId(), faceId);
   BOOST_CHECK_EQUAL(notification.getRemoteUri(), face->getRemoteUri().toString());
@@ -332,7 +342,7 @@ BOOST_AUTO_TEST_CASE(FaceEventCreated)
   BOOST_CHECK_EQUAL(notification.getFaceScope(), ndn::nfd::FACE_SCOPE_NON_LOCAL);
   BOOST_CHECK_EQUAL(notification.getFacePersistency(), ndn::nfd::FACE_PERSISTENCY_PERSISTENT);
   BOOST_CHECK_EQUAL(notification.getLinkType(), ndn::nfd::LinkType::LINK_TYPE_POINT_TO_POINT);
-  BOOST_CHECK_EQUAL(notification.getFlags(), 0x0);
+  BOOST_CHECK_EQUAL(notification.getFlags(), 0);
 }
 
 BOOST_AUTO_TEST_CASE(FaceEventDownUp)
@@ -348,12 +358,10 @@ BOOST_AUTO_TEST_CASE(FaceEventDownUp)
 
   // check notification
   {
-    Block payload;
-    ndn::nfd::FaceEventNotification notification;
     BOOST_REQUIRE_EQUAL(m_responses.size(), 2);
-    BOOST_CHECK_NO_THROW(payload = m_responses.back().getContent().blockFromValue());
+    Block payload = m_responses.back().getContent().blockFromValue();
     BOOST_CHECK_EQUAL(payload.type(), ndn::tlv::nfd::FaceEventNotification);
-    BOOST_CHECK_NO_THROW(notification.wireDecode(payload));
+    ndn::nfd::FaceEventNotification notification(payload);
     BOOST_CHECK_EQUAL(notification.getKind(), ndn::nfd::FACE_EVENT_DOWN);
     BOOST_CHECK_EQUAL(notification.getFaceId(), faceId);
     BOOST_CHECK_EQUAL(notification.getRemoteUri(), face->getRemoteUri().toString());
@@ -361,7 +369,7 @@ BOOST_AUTO_TEST_CASE(FaceEventDownUp)
     BOOST_CHECK_EQUAL(notification.getFaceScope(), ndn::nfd::FACE_SCOPE_NON_LOCAL);
     BOOST_CHECK_EQUAL(notification.getFacePersistency(), ndn::nfd::FACE_PERSISTENCY_PERSISTENT);
     BOOST_CHECK_EQUAL(notification.getLinkType(), ndn::nfd::LinkType::LINK_TYPE_POINT_TO_POINT);
-    BOOST_CHECK_EQUAL(notification.getFlags(), 0x0);
+    BOOST_CHECK_EQUAL(notification.getFlags(), 0);
   }
 
   // trigger FACE_EVENT_UP notification
@@ -371,12 +379,10 @@ BOOST_AUTO_TEST_CASE(FaceEventDownUp)
 
   // check notification
   {
-    Block payload;
-    ndn::nfd::FaceEventNotification notification;
     BOOST_REQUIRE_EQUAL(m_responses.size(), 3);
-    BOOST_CHECK_NO_THROW(payload = m_responses.back().getContent().blockFromValue());
+    Block payload = m_responses.back().getContent().blockFromValue();
     BOOST_CHECK_EQUAL(payload.type(), ndn::tlv::nfd::FaceEventNotification);
-    BOOST_CHECK_NO_THROW(notification.wireDecode(payload));
+    ndn::nfd::FaceEventNotification notification(payload);
     BOOST_CHECK_EQUAL(notification.getKind(), ndn::nfd::FACE_EVENT_UP);
     BOOST_CHECK_EQUAL(notification.getFaceId(), faceId);
     BOOST_CHECK_EQUAL(notification.getRemoteUri(), face->getRemoteUri().toString());
@@ -384,7 +390,7 @@ BOOST_AUTO_TEST_CASE(FaceEventDownUp)
     BOOST_CHECK_EQUAL(notification.getFaceScope(), ndn::nfd::FACE_SCOPE_NON_LOCAL);
     BOOST_CHECK_EQUAL(notification.getFacePersistency(), ndn::nfd::FACE_PERSISTENCY_PERSISTENT);
     BOOST_CHECK_EQUAL(notification.getLinkType(), ndn::nfd::LinkType::LINK_TYPE_POINT_TO_POINT);
-    BOOST_CHECK_EQUAL(notification.getFlags(), 0x0);
+    BOOST_CHECK_EQUAL(notification.getFlags(), 0);
   }
 }
 
@@ -400,12 +406,10 @@ BOOST_AUTO_TEST_CASE(FaceEventDestroyed)
   advanceClocks(time::milliseconds(1), 10);
 
   // check notification
-  Block payload;
-  ndn::nfd::FaceEventNotification notification;
   BOOST_REQUIRE_EQUAL(m_responses.size(), 2);
-  BOOST_CHECK_NO_THROW(payload = m_responses.back().getContent().blockFromValue());
+  Block payload = m_responses.back().getContent().blockFromValue();
   BOOST_CHECK_EQUAL(payload.type(), ndn::tlv::nfd::FaceEventNotification);
-  BOOST_CHECK_NO_THROW(notification.wireDecode(payload));
+  ndn::nfd::FaceEventNotification notification(payload);
   BOOST_CHECK_EQUAL(notification.getKind(), ndn::nfd::FACE_EVENT_DESTROYED);
   BOOST_CHECK_EQUAL(notification.getFaceId(), faceId);
   BOOST_CHECK_EQUAL(notification.getRemoteUri(), face->getRemoteUri().toString());
@@ -413,7 +417,7 @@ BOOST_AUTO_TEST_CASE(FaceEventDestroyed)
   BOOST_CHECK_EQUAL(notification.getFaceScope(), ndn::nfd::FACE_SCOPE_NON_LOCAL);
   BOOST_CHECK_EQUAL(notification.getFacePersistency(), ndn::nfd::FACE_PERSISTENCY_PERSISTENT);
   BOOST_CHECK_EQUAL(notification.getLinkType(), ndn::nfd::LinkType::LINK_TYPE_POINT_TO_POINT);
-  BOOST_CHECK_EQUAL(notification.getFlags(), 0x0);
+  BOOST_CHECK_EQUAL(notification.getFlags(), 0);
 
   BOOST_CHECK_EQUAL(face->getId(), face::INVALID_FACEID);
   BOOST_CHECK_EQUAL(m_manager.m_faceStateChangeConn.count(faceId), 0);

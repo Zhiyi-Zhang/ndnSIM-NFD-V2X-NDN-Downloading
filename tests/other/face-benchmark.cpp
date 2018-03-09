@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -29,6 +29,7 @@
 #include "face/tcp-channel.hpp"
 #include "face/udp-channel.hpp"
 
+#include <ndn-cxx/net/address-converter.hpp>
 #include <fstream>
 #include <iostream>
 
@@ -44,8 +45,8 @@ class FaceBenchmark
 public:
   FaceBenchmark(const char* configFileName)
     : m_terminationSignalSet{getGlobalIoService()}
-    , m_tcpChannel{tcp::Endpoint{boost::asio::ip::tcp::v4(), 6363}}
-    , m_udpChannel{udp::Endpoint{boost::asio::ip::udp::v4(), 6363}, time::minutes{10}}
+    , m_tcpChannel{tcp::Endpoint{boost::asio::ip::tcp::v4(), 6363}, false}
+    , m_udpChannel{udp::Endpoint{boost::asio::ip::udp::v4(), 6363}, time::minutes{10}, false}
   {
     m_terminationSignalSet.add(SIGINT);
     m_terminationSignalSet.add(SIGTERM);
@@ -124,17 +125,15 @@ private:
     }
 
     // create the right face
-    auto addr = boost::asio::ip::address::from_string(uriR.getHost());
+    auto addr = ndn::ip::addressFromString(uriR.getHost());
     auto port = boost::lexical_cast<uint16_t>(uriR.getPort());
     if (uriR.getScheme() == "tcp4") {
-      m_tcpChannel.connect(tcp::Endpoint(addr, port),
-                           false,
+      m_tcpChannel.connect(tcp::Endpoint(addr, port), {},
                            bind(&FaceBenchmark::onRightFaceCreated, this, faceL, _1),
                            bind(&FaceBenchmark::onFaceCreationFailed, _1, _2));
     }
     else if (uriR.getScheme() == "udp4") {
-      m_udpChannel.connect(udp::Endpoint(addr, port),
-                           ndn::nfd::FACE_PERSISTENCY_PERSISTENT,
+      m_udpChannel.connect(udp::Endpoint(addr, port), {},
                            bind(&FaceBenchmark::onRightFaceCreated, this, faceL, _1),
                            bind(&FaceBenchmark::onFaceCreationFailed, _1, _2));
     }
@@ -166,8 +165,8 @@ private:
 
 private:
   boost::asio::signal_set m_terminationSignalSet;
-  TcpChannel m_tcpChannel;
-  UdpChannel m_udpChannel;
+  face::TcpChannel m_tcpChannel;
+  face::UdpChannel m_udpChannel;
   std::vector<std::pair<FaceUri, FaceUri>> m_faceUris;
 };
 

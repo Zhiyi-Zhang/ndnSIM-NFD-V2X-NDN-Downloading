@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,12 +26,10 @@
 #ifndef NFD_DAEMON_FACE_GENERIC_LINK_SERVICE_HPP
 #define NFD_DAEMON_FACE_GENERIC_LINK_SERVICE_HPP
 
-#include "core/common.hpp"
-#include "core/logger.hpp"
-
 #include "link-service.hpp"
 #include "lp-fragmenter.hpp"
 #include "lp-reassembler.hpp"
+#include "lp-reliability.hpp"
 
 namespace nfd {
 namespace face {
@@ -43,9 +41,6 @@ namespace face {
 class GenericLinkServiceCounters : public virtual LinkService::Counters
 {
 public:
-  explicit
-  GenericLinkServiceCounters(const LpReassembler& reassembler);
-
   /** \brief count of failed fragmentations
    */
   PacketCounter nFragmentationErrors;
@@ -71,10 +66,28 @@ public:
   /** \brief count of invalid reassembled network-layer packets dropped
    */
   PacketCounter nInNetInvalid;
+
+  /** \brief count of network-layer packets that did not require retransmission of a fragment
+   */
+  PacketCounter nAcknowledged;
+
+  /** \brief count of network-layer packets that had at least one fragment retransmitted, but were
+   *         eventually received in full
+   */
+  PacketCounter nRetransmitted;
+
+  /** \brief count of network-layer packets dropped because a fragment reached the maximum number
+   *         of retransmissions
+   */
+  PacketCounter nRetxExhausted;
+
+  /** \brief count of outgoing LpPackets that were marked with congestion marks
+   */
+  PacketCounter nCongestionMarked;
 };
 
 /** \brief GenericLinkService is a LinkService that implements the NDNLPv2 protocol
- *  \sa http://redmine.named-data.net/projects/nfd/wiki/NDNLPv2
+ *  \sa https://redmine.named-data.net/projects/nfd/wiki/NDNLPv2
  */
 class GenericLinkService : public LinkService
                          , protected virtual GenericLinkServiceCounters
@@ -107,11 +120,31 @@ public:
     /** \brief options for reassembly
      */
     LpReassembler::Options reassemblerOptions;
+
+    /** \brief options for reliability
+     */
+    LpReliability::Options reliabilityOptions;
+
+    /** \brief enables send queue congestion detection and marking
+     */
+    bool allowCongestionMarking;
+
+    /** \brief starting value for congestion marking interval
+     */
+    time::nanoseconds baseCongestionMarkingInterval;
+
+    /** \brief default congestion threshold in bytes
+     */
+    size_t defaultCongestionThreshold;
+
+    /** \brief enables self-learning forwarding support
+     */
+    bool allowSelfLearning;
   };
 
   /** \brief counters provided by GenericLinkService
    */
-  typedef GenericLinkServiceCounters Counters;
+  using Counters = GenericLinkServiceCounters;
 
   explicit
   GenericLinkService(const Options& options = Options());
@@ -126,10 +159,21 @@ public:
   void
   setOptions(const Options& options);
 
-  virtual const Counters&
+  const Counters&
   getCounters() const override;
 
-private: // send path
+PROTECTED_WITH_TESTS_ELSE_PRIVATE: // send path
+  /** \brief request an IDLE packet to transmit pending service fields
+   */
+  void
+  requestIdlePacket();
+
+  /** \brief send an LpPacket fragment
+   *  \param pkt LpPacket to send
+   */
+  void
+  sendLpPacket(lp::Packet&& pkt);
+
   /** \brief send Interest
    */
   void
@@ -145,18 +189,20 @@ private: // send path
   void
   doSendNack(const ndn::lp::Nack& nack) override;
 
+private: // send path
   /** \brief encode link protocol fields from tags onto an outgoing LpPacket
    *  \param netPkt network-layer packet to extract tags from
    *  \param lpPacket LpPacket to add link protocol fields to
    */
   void
-  encodeLpFields(const ndn::TagHost& netPkt, lp::Packet& lpPacket);
+  encodeLpFields(const ndn::PacketBase& netPkt, lp::Packet& lpPacket);
 
   /** \brief send a complete network layer packet
    *  \param pkt LpPacket containing a complete network layer packet
+   *  \param isInterest whether the network layer packet is an Interest
    */
   void
-  sendNetPacket(lp::Packet&& pkt);
+  sendNetPacket(lp::Packet&& pkt, bool isInterest);
 
   /** \brief assign a sequence number to an LpPacket
    */
@@ -167,6 +213,13 @@ private: // send path
    */
   void
   assignSequences(std::vector<lp::Packet>& pkts);
+
+  /** \brief if the send queue is found to be congested, add a congestion mark to the packet
+   *         according to CoDel
+   *  \sa https://tools.ietf.org/html/rfc8289
+   */
+  void
+  checkCongestionLevel(lp::Packet& pkt);
 
 private: // receive path
   /** \brief receive Packet from Transport
@@ -220,23 +273,30 @@ private: // receive path
   void
   decodeNack(const Block& netPkt, const lp::Packet& firstPkt);
 
-private:
+PROTECTED_WITH_TESTS_ELSE_PRIVATE:
   Options m_options;
   LpFragmenter m_fragmenter;
   LpReassembler m_reassembler;
+  LpReliability m_reliability;
   lp::Sequence m_lastSeqNo;
+
+PUBLIC_WITH_TESTS_ELSE_PRIVATE:
+  /// CongestionMark TLV-TYPE (3 octets) + CongestionMark TLV-LENGTH (1 octet) + sizeof(uint64_t)
+  static constexpr size_t CONGESTION_MARK_SIZE = 3 + 1 + sizeof(uint64_t);
+  /// Time to mark next packet due to send queue congestion
+  time::steady_clock::TimePoint m_nextMarkTime;
+  /// Time last packet was marked
+  time::steady_clock::TimePoint m_lastMarkTime;
+  /// number of marked packets in the current incident of congestion
+  size_t m_nMarkedSinceInMarkingState;
+
+  friend class LpReliability;
 };
 
 inline const GenericLinkService::Options&
 GenericLinkService::getOptions() const
 {
   return m_options;
-}
-
-inline void
-GenericLinkService::setOptions(const GenericLinkService::Options& options)
-{
-  m_options = options;
 }
 
 inline const GenericLinkService::Counters&

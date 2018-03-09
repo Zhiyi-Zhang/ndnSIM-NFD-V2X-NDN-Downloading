@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -37,14 +37,14 @@ Scheduler&
 getGlobalScheduler()
 {
   if (g_scheduler.get() == nullptr) {
-    g_scheduler.reset(new Scheduler(getGlobalIoService()));
+    g_scheduler.reset(new Scheduler(*static_cast<boost::asio::io_service*>(nullptr)));
   }
 
   return *g_scheduler;
 }
 
 EventId
-schedule(const time::nanoseconds& after, const Scheduler::Event& event)
+schedule(time::nanoseconds after, const EventCallback& event)
 {
   return getGlobalScheduler().scheduleEvent(after, event);
 }

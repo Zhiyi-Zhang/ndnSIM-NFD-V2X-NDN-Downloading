@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,26 +26,18 @@
 #ifndef NFD_DAEMON_FACE_ETHERNET_TRANSPORT_HPP
 #define NFD_DAEMON_FACE_ETHERNET_TRANSPORT_HPP
 
-#include "core/common.hpp"
+#include "ethernet-protocol.hpp"
+#include "pcap-helper.hpp"
 #include "transport.hpp"
-#include "core/network-interface.hpp"
-
-#ifndef HAVE_LIBPCAP
-#error "Cannot include this file when libpcap is not available"
-#endif
-
-// forward declarations
-struct pcap;
-typedef pcap pcap_t;
-struct pcap_pkthdr;
+#include <ndn-cxx/net/network-interface.hpp>
 
 namespace nfd {
 namespace face {
 
 /**
- * \brief A multicast Transport that uses raw Ethernet II frames
+ * @brief Base class for Ethernet-based Transports
  */
-class EthernetTransport final : public Transport
+class EthernetTransport : public Transport
 {
 public:
   class Error : public std::runtime_error
@@ -59,43 +51,37 @@ public:
   };
 
   /**
-   * @brief Creates an Ethernet-based transport for multicast communication
+   * @brief Processes the payload of an incoming frame
+   * @param payload Pointer to the first byte of data after the Ethernet header
+   * @param length Payload length
+   * @param sender Sender address
    */
-  EthernetTransport(const NetworkInterfaceInfo& interface,
-                    const ethernet::Address& mcastAddress);
+  void
+  receivePayload(const uint8_t* payload, size_t length,
+                 const ethernet::Address& sender);
 
 protected:
-  virtual void
-  beforeChangePersistency(ndn::nfd::FacePersistency newPersistency) final;
+  EthernetTransport(const ndn::net::NetworkInterface& localEndpoint,
+                    const ethernet::Address& remoteEndpoint);
 
-  virtual void
+  void
   doClose() final;
 
-private:
-  virtual void
-  doSend(Transport::Packet&& packet) final;
-
-  /**
-   * @brief Allocates and initializes a libpcap context for live capture
-   */
-  void
-  pcapInit();
-
-  /**
-   * @brief Installs a BPF filter on the receiving socket
-   *
-   * @param filterString string containing the source BPF program
-   */
-  void
-  setPacketFilter(const char* filterString);
-
-  /**
-   * @brief Enables receiving frames addressed to our MAC multicast group
-   *
-   * @return true if successful, false otherwise
-   */
   bool
-  joinMulticastGroup();
+  hasRecentlyReceived() const
+  {
+    return m_hasRecentlyReceived;
+  }
+
+  void
+  resetRecentlyReceived()
+  {
+    m_hasRecentlyReceived = false;
+  }
+
+private:
+  void
+  doSend(Transport::Packet&& packet) final;
 
   /**
    * @brief Sends the specified TLV block on the network wrapped in an Ethernet frame
@@ -103,49 +89,27 @@ private:
   void
   sendPacket(const ndn::Block& block);
 
-  /**
-   * @brief Receive callback
-   */
   void
-  handleRead(const boost::system::error_code& error, size_t nBytesRead);
+  asyncRead();
 
-PUBLIC_WITH_TESTS_ELSE_PRIVATE:
-  /**
-   * @brief Processes an incoming frame as captured by libpcap
-   *
-   * @param header pointer to capture metadata
-   * @param packet pointer to the received frame, including the link-layer header
-   */
   void
-  processIncomingPacket(const pcap_pkthdr* header, const uint8_t* packet);
+  handleRead(const boost::system::error_code& error);
 
-private:
-  /**
-   * @brief Handles errors encountered by Boost.Asio on the receive path
-   */
   void
-  processErrorCode(const boost::system::error_code& error);
+  handleError(const std::string& errorMessage);
 
-  /**
-   * @brief Returns the MTU of the underlying network interface
-   */
-  size_t
-  getInterfaceMtu();
-
-private:
-  unique_ptr<pcap_t, void(*)(pcap_t*)> m_pcap;
+protected:
   boost::asio::posix::stream_descriptor m_socket;
-
+  PcapHelper m_pcap;
   ethernet::Address m_srcAddress;
   ethernet::Address m_destAddress;
   std::string m_interfaceName;
-#if defined(__linux__)
-  int m_interfaceIndex;
-#endif
 
+private:
+  bool m_hasRecentlyReceived;
 #ifdef _DEBUG
-  /// number of packets dropped by the kernel, as reported by libpcap
-  unsigned int m_nDropped;
+  /// number of frames dropped by the kernel, as reported by libpcap
+  size_t m_nDropped;
 #endif
 };
 

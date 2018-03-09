@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -56,13 +56,16 @@
 #include <utility>
 #include <vector>
 
-#include <ndn-cxx/interest.hpp>
 #include <ndn-cxx/data.hpp>
+#include <ndn-cxx/delegation.hpp>
+#include <ndn-cxx/delegation-list.hpp>
+#include <ndn-cxx/exclude.hpp>
+#include <ndn-cxx/interest.hpp>
 #include <ndn-cxx/name.hpp>
 #include <ndn-cxx/encoding/block.hpp>
 #include <ndn-cxx/lp/nack.hpp>
+#include <ndn-cxx/net/face-uri.hpp>
 #include <ndn-cxx/util/backports.hpp>
-#include <ndn-cxx/util/face-uri.hpp>
 #include <ndn-cxx/util/signal.hpp>
 
 #include <boost/asio.hpp>
@@ -96,24 +99,27 @@ using std::cref;
 
 using ndn::to_string;
 
-using ndn::Interest;
+using ndn::Block;
 using ndn::Data;
+using ndn::Delegation;
+using ndn::DelegationList;
+using ndn::Exclude;
+using ndn::FaceUri;
+using ndn::Interest;
 using ndn::Name;
 using ndn::PartialName;
-using ndn::Exclude;
-using ndn::Link;
-using ndn::Block;
-using ndn::util::FaceUri;
 
+// Not using a namespace alias (namespace tlv = ndn::tlv), because
+// it doesn't allow NFD to add other members to the namespace
 namespace tlv {
-// Don't write "namespace tlv = ndn::tlv", because NFD can add other members into this namespace.
 using namespace ndn::tlv;
 } // namespace tlv
 
 namespace lp = ndn::lp;
 namespace name = ndn::name;
-namespace time = ndn::time;
 namespace signal = ndn::util::signal;
+namespace time = ndn::time;
+using namespace ndn::time_literals;
 
 } // namespace nfd
 

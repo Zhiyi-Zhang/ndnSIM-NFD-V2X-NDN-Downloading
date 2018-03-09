@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -41,15 +41,16 @@ NameTree::NameTree(size_t nBuckets)
 }
 
 Entry&
-NameTree::lookup(const Name& name)
+NameTree::lookup(const Name& name, bool enforceMaxDepth)
 {
   NFD_LOG_TRACE("lookup " << name);
+  size_t depth = enforceMaxDepth ? std::min(name.size(), getMaxDepth()) : name.size();
 
-  HashSequence hashes = computeHashes(name);
+  HashSequence hashes = computeHashes(name, depth);
   const Node* node = nullptr;
   Entry* parent = nullptr;
 
-  for (size_t prefixLen = 0; prefixLen <= name.size(); ++prefixLen) {
+  for (size_t prefixLen = 0; prefixLen <= depth; ++prefixLen) {
     bool isNew = false;
     std::tie(node, isNew) = m_ht.insert(name, prefixLen, hashes);
 
@@ -145,9 +146,9 @@ NameTree::eraseIfEmpty(Entry* entry, bool canEraseAncestors)
 }
 
 Entry*
-NameTree::findExactMatch(const Name& name) const
+NameTree::findExactMatch(const Name& name, size_t prefixLen) const
 {
-  const Node* node = m_ht.find(name, name.size());
+  const Node* node = m_ht.find(name, std::min(name.size(), prefixLen));
   return node == nullptr ? nullptr : &node->entry;
 }
 
@@ -179,39 +180,19 @@ NameTree::findLongestPrefixMatch(const Entry& entry1, const EntrySelector& entry
   return nullptr;
 }
 
-template<typename ENTRY>
-Entry*
-NameTree::findLongestPrefixMatch(const ENTRY& tableEntry, const EntrySelector& entrySelector) const
-{
-  const Entry* nte = this->getEntry(tableEntry);
-  BOOST_ASSERT(nte != nullptr);
-  return this->findLongestPrefixMatch(*nte, entrySelector);
-}
-
-template Entry*
-NameTree::findLongestPrefixMatch<fib::Entry>(const fib::Entry&, const EntrySelector&) const;
-
-template Entry*
-NameTree::findLongestPrefixMatch<measurements::Entry>(const measurements::Entry&,
-                                                      const EntrySelector&) const;
-
-template Entry*
-NameTree::findLongestPrefixMatch<strategy_choice::Entry>(const strategy_choice::Entry&,
-                                                         const EntrySelector&) const;
-
 Entry*
 NameTree::findLongestPrefixMatch(const pit::Entry& pitEntry, const EntrySelector& entrySelector) const
 {
   const Entry* nte = this->getEntry(pitEntry);
   BOOST_ASSERT(nte != nullptr);
 
+  // PIT entry Interest name either exceeds depth limit or ends with an implicit digest: go deeper
   if (nte->getName().size() < pitEntry.getName().size()) {
-    // special case: PIT entry whose Interest name ends with an implicit digest
-    // are attached to the name tree entry with one-shorter-prefix.
-    BOOST_ASSERT(pitEntry.getName().at(-1).isImplicitSha256Digest());
-    BOOST_ASSERT(nte->getName() == pitEntry.getName().getPrefix(-1));
-    const Entry* exact = this->findExactMatch(pitEntry.getName());
-    if (exact != nullptr) {
+    for (size_t prefixLen = nte->getName().size() + 1; prefixLen <= pitEntry.getName().size(); ++prefixLen) {
+      const Entry* exact = this->findExactMatch(pitEntry.getName(), prefixLen);
+      if (exact == nullptr) {
+        break;
+      }
       nte = exact;
     }
   }

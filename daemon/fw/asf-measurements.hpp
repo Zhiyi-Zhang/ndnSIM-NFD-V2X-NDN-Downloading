@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,7 +26,7 @@
 #ifndef NFD_DAEMON_FW_ASF_MEASUREMENTS_HPP
 #define NFD_DAEMON_FW_ASF_MEASUREMENTS_HPP
 
-#include "fw/rtt-estimator.hpp"
+#include "core/rtt-estimator.hpp"
 #include "fw/strategy-info.hpp"
 #include "table/measurements-accessor.hpp"
 
@@ -166,6 +166,18 @@ public:
     return getSrtt() != RttStats::RTT_NO_MEASUREMENT;
   }
 
+  size_t
+  getNSilentTimeouts() const
+  {
+    return m_nSilentTimeouts;
+  }
+
+  void
+  setNSilentTimeouts(size_t nSilentTimeouts)
+  {
+    m_nSilentTimeouts = nSilentTimeouts;
+  }
+
 private:
   void
   cancelTimeoutEvent();
@@ -183,9 +195,10 @@ private:
   // RTO associated with Interest
   scheduler::EventId m_timeoutEventId;
   bool m_isTimeoutScheduled;
+  size_t m_nSilentTimeouts;
 };
 
-typedef std::unordered_map<face::FaceId, FaceInfo> FaceInfoTable;
+typedef std::unordered_map<FaceId, FaceInfo> FaceInfoTable;
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -204,25 +217,30 @@ public:
   }
 
   FaceInfo&
-  getOrCreateFaceInfo(const fib::Entry& fibEntry, const Face& face);
+  getOrCreateFaceInfo(const fib::Entry& fibEntry, FaceId faceId);
 
   FaceInfo*
-  getFaceInfo(const fib::Entry& fibEntry, const Face& face);
+  getFaceInfo(const fib::Entry& fibEntry, FaceId faceId);
 
   void
-  expireFaceInfo(nfd::face::FaceId faceId);
+  expireFaceInfo(FaceId faceId);
 
   void
-  extendFaceInfoLifetime(FaceInfo& info, const Face& face);
+  extendFaceInfoLifetime(FaceInfo& info, FaceId faceId);
 
-  FaceInfo&
-  get(nfd::face::FaceId faceId)
+  FaceInfo*
+  get(FaceId faceId)
   {
-    return m_fit.at(faceId);
+    if (m_fit.find(faceId) != m_fit.end()) {
+      return &m_fit.at(faceId);
+    }
+    else {
+      return nullptr;
+    }
   }
 
   FaceInfoTable::iterator
-  find(nfd::face::FaceId faceId)
+  find(FaceId faceId)
   {
     return m_fit.find(faceId);
   }
@@ -234,7 +252,7 @@ public:
   }
 
   const FaceInfoTable::iterator
-  insert(nfd::face::FaceId faceId)
+  insert(FaceId faceId)
   {
     const auto& pair = m_fit.insert(std::make_pair(faceId, FaceInfo()));
     return pair.first;
@@ -283,10 +301,10 @@ public:
   AsfMeasurements(MeasurementsAccessor& measurements);
 
   FaceInfo*
-  getFaceInfo(const fib::Entry& fibEntry, const Interest& interest, const Face& face);
+  getFaceInfo(const fib::Entry& fibEntry, const Interest& interest, FaceId faceId);
 
   FaceInfo&
-  getOrCreateFaceInfo(const fib::Entry& fibEntry, const Interest& interest, const Face& face);
+  getOrCreateFaceInfo(const fib::Entry& fibEntry, const Interest& interest, FaceId faceId);
 
   NamespaceInfo*
   getNamespaceInfo(const Name& prefix);

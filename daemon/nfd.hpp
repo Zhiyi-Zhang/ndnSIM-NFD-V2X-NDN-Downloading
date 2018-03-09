@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -29,8 +29,8 @@
 #include "core/config-file.hpp"
 #include "core/scheduler.hpp"
 
+#include <ndn-cxx/net/network-monitor.hpp>
 #include <ndn-cxx/security/key-chain.hpp>
-#include <ndn-cxx/util/network-monitor.hpp>
 
 namespace ndn {
 class Face;
@@ -43,13 +43,17 @@ namespace nfd {
 
 class Forwarder;
 class CommandAuthenticator;
-class FibManager;
-class FaceManager;
-class StrategyChoiceManager;
+
+// forward-declare management modules, in the order as defined in management protocol
 class ForwarderStatusManager;
+class FaceManager;
+class FibManager;
+class CsManager;
+class StrategyChoiceManager;
 
 namespace face {
 class Face;
+class FaceSystem;
 } // namespace face
 
 /**
@@ -92,6 +96,9 @@ public:
   reloadConfigFile();
 
 private:
+  explicit
+  Nfd(ndn::KeyChain& keyChain);
+
   void
   initializeLogging();
 
@@ -106,6 +113,7 @@ private:
   ConfigSection m_configSection;
 
   unique_ptr<Forwarder> m_forwarder;
+  unique_ptr<face::FaceSystem> m_faceSystem;
 
   ndn::KeyChain& m_keyChain;
   shared_ptr<face::Face> m_internalFace;
@@ -115,9 +123,10 @@ private:
   unique_ptr<ForwarderStatusManager> m_forwarderStatusManager;
   unique_ptr<FaceManager> m_faceManager;
   unique_ptr<FibManager> m_fibManager;
+  unique_ptr<CsManager> m_csManager;
   unique_ptr<StrategyChoiceManager> m_strategyChoiceManager;
 
-  unique_ptr<ndn::util::NetworkMonitor> m_networkMonitor;
+  shared_ptr<ndn::net::NetworkMonitor> m_netmon;
   scheduler::ScopedEventId m_reloadConfigEvent;
 };
 

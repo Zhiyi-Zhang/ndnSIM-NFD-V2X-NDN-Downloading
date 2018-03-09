@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,24 +26,29 @@
 #ifndef NFD_DAEMON_FACE_CHANNEL_HPP
 #define NFD_DAEMON_FACE_CHANNEL_HPP
 
+#include "channel-log.hpp"
 #include "face.hpp"
 
+#include <boost/logic/tribool.hpp>
+
 namespace nfd {
+namespace face {
 
-/**
- * \brief Prototype for the callback that is invoked when the face
- *        is created (as a response to incoming connection or after
- *        connection is established)
+/** \brief Prototype for the callback that is invoked when a face is created
+ *         (in response to an incoming connection or after a connection is established)
  */
-typedef function<void(const shared_ptr<Face>& newFace)> FaceCreatedCallback;
+using FaceCreatedCallback = function<void(const shared_ptr<Face>& face)>;
 
-/**
- * \brief Prototype for the callback that is invoked when the face
- *        fails to be created
+/** \brief Prototype for the callback that is invoked when a face fails to be created
  */
-typedef function<void(uint32_t status, const std::string& reason)> FaceCreationFailedCallback;
+using FaceCreationFailedCallback = function<void(uint32_t status, const std::string& reason)>;
 
-
+/** \brief represent a channel that communicates on a local endpoint
+ *  \sa FaceSystem
+ *
+ *  A channel can listen on a local endpoint and initiate outgoing connection from a local endpoint.
+ *  A channel creates Face objects and retains shared ownership of them.
+ */
 class Channel : noncopyable
 {
 public:
@@ -51,7 +56,20 @@ public:
   ~Channel();
 
   const FaceUri&
-  getUri() const;
+  getUri() const
+  {
+    return m_uri;
+  }
+
+  /** \brief Returns whether the channel is listening
+   */
+  virtual bool
+  isListening() const = 0;
+
+  /** \brief Returns the number of faces in the channel
+   */
+  virtual size_t
+  size() const = 0;
 
 protected:
   void
@@ -61,11 +79,31 @@ private:
   FaceUri m_uri;
 };
 
-inline const FaceUri&
-Channel::getUri() const
+/** \brief Parameters used to set Transport properties or LinkService options on a newly created face
+ *
+ *  Parameters are passed as a struct rather than individually, so that a future change in the list
+ *  of parameters does not require an update to the method signature in all subclasses.
+ */
+class FaceParams
 {
-  return m_uri;
-}
+public:
+  // get rid of this constructor and use aggregate init + NSDMIs when we switch to C++14
+  FaceParams() noexcept
+    : persistency(ndn::nfd::FACE_PERSISTENCY_PERSISTENT)
+    , wantLocalFields(false)
+    , wantLpReliability(false)
+    , wantCongestionMarking(boost::logic::indeterminate)
+  {
+  }
+
+public:
+  ndn::nfd::FacePersistency persistency;
+  ndn::optional<time::nanoseconds> baseCongestionMarkingInterval;
+  ndn::optional<uint64_t> defaultCongestionThreshold;
+  bool wantLocalFields;
+  bool wantLpReliability;
+  boost::logic::tribool wantCongestionMarking;
+};
 
 /** \brief invokes a callback when the face is closed
  *  \param face the face
@@ -77,6 +115,7 @@ Channel::getUri() const
 void
 connectFaceClosedSignal(Face& face, const std::function<void()>& f);
 
+} // namespace face
 } // namespace nfd
 
 #endif // NFD_DAEMON_FACE_CHANNEL_HPP

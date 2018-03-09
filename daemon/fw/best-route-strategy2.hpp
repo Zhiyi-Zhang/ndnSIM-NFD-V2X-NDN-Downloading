@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,6 +27,7 @@
 #define NFD_DAEMON_FW_BEST_ROUTE_STRATEGY2_HPP
 
 #include "strategy.hpp"
+#include "process-nack-traits.hpp"
 #include "retx-suppression-exponential.hpp"
 
 namespace nfd {
@@ -50,26 +51,29 @@ namespace fw {
  *  The reason of the sent Nack equals the least severe reason among received Nacks.
  */
 class BestRouteStrategy2 : public Strategy
+                         , public ProcessNackTraits<BestRouteStrategy2>
 {
 public:
   explicit
-  BestRouteStrategy2(Forwarder& forwarder, const Name& name = STRATEGY_NAME);
+  BestRouteStrategy2(Forwarder& forwarder, const Name& name = getStrategyName());
 
-  virtual void
+  static const Name&
+  getStrategyName();
+
+  void
   afterReceiveInterest(const Face& inFace, const Interest& interest,
                        const shared_ptr<pit::Entry>& pitEntry) override;
 
-  virtual void
+  void
   afterReceiveNack(const Face& inFace, const lp::Nack& nack,
                    const shared_ptr<pit::Entry>& pitEntry) override;
-
-public:
-  static const Name STRATEGY_NAME;
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   static const time::milliseconds RETX_SUPPRESSION_INITIAL;
   static const time::milliseconds RETX_SUPPRESSION_MAX;
   RetxSuppressionExponential m_retxSuppression;
+
+  friend ProcessNackTraits<BestRouteStrategy2>;
 };
 
 } // namespace fw

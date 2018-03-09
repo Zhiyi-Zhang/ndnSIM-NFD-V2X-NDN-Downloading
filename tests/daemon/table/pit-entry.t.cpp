@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -55,8 +55,7 @@ BOOST_AUTO_TEST_CASE(CanMatch)
   BOOST_CHECK_EQUAL(entry.canMatch(*interest3), true);
 
   shared_ptr<Interest> interest4 = makeInterest("/A");
-  shared_ptr<Link> link4 = makeLink("/net/ndnsim", {{10, "/telia/terabits"}, {20, "/ucla/cs"}});
-  interest4->setLink(link4->wireEncode());
+  interest4->setForwardingHint({{10, "/telia/terabits"}, {20, "/ucla/cs"}});
   BOOST_CHECK_EQUAL(entry.canMatch(*interest4), false); // expected failure until #3162
 
   shared_ptr<Interest> interest5 = makeInterest("/A");
@@ -178,8 +177,6 @@ BOOST_AUTO_TEST_CASE(InOutRecords)
 BOOST_AUTO_TEST_CASE(Lifetime)
 {
   shared_ptr<Interest> interest = makeInterest("ndn:/7oIEurbgy6");
-  // library uses -1 to indicate unset lifetime
-  BOOST_ASSERT(interest->getInterestLifetime() < time::milliseconds::zero());
 
   shared_ptr<Face> face = make_shared<DummyFace>();
   Entry entry(*interest);

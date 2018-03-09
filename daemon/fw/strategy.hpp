@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,7 +27,6 @@
 #define NFD_DAEMON_FW_STRATEGY_HPP
 
 #include "forwarder.hpp"
-#include "strategy-registry.hpp"
 #include "table/measurements-accessor.hpp"
 
 namespace nfd {
@@ -35,25 +34,80 @@ namespace fw {
 
 /** \brief represents a forwarding strategy
  */
-class Strategy : public enable_shared_from_this<Strategy>, noncopyable
+class Strategy : noncopyable
 {
-public:
-  /** \brief construct a strategy instance
-   *  \param forwarder a reference to the Forwarder, used to enable actions and accessors.
-   *         Strategy subclasses should pass this reference,
-   *         and should not keep a reference themselves.
-   *  \param name the strategy Name.
-   *         It's recommended to include a version number as the last component.
+public: // registry
+  /** \brief register a strategy type
+   *  \tparam S subclass of Strategy
+   *  \param strategyName strategy program name, must contain version
+   *  \note It is permitted to register the same strategy type under multiple names,
+   *        which is useful in tests and for creating aliases.
    */
-  Strategy(Forwarder& forwarder, const Name& name);
+  template<typename S>
+  static void
+  registerType(const Name& strategyName = S::getStrategyName())
+  {
+    BOOST_ASSERT(strategyName.size() > 1);
+    BOOST_ASSERT(strategyName.at(-1).isVersion());
+    Registry& registry = getRegistry();
+    BOOST_ASSERT(registry.count(strategyName) == 0);
+    registry[strategyName] = &make_unique<S, Forwarder&, const Name&>;
+  }
+
+  /** \return whether a strategy instance can be created from \p instanceName
+   *  \param instanceName strategy instance name, may contain version and parameters
+   *  \note This function finds a strategy type using same rules as \p create ,
+   *        but does not attempt to construct an instance.
+   */
+  static bool
+  canCreate(const Name& instanceName);
+
+  /** \return a strategy instance created from \p instanceName
+   *  \retval nullptr if !canCreate(instanceName)
+   *  \throw std::invalid_argument strategy type constructor does not accept
+   *                               specified version or parameters
+   */
+  static unique_ptr<Strategy>
+  create(const Name& instanceName, Forwarder& forwarder);
+
+  /** \return whether \p instanceNameA and \p instanceNameA will initiate same strategy type
+   */
+  static bool
+  areSameType(const Name& instanceNameA, const Name& instanceNameB);
+
+  /** \return registered versioned strategy names
+   */
+  static std::set<Name>
+  listRegistered();
+
+public: // constructor, destructor, strategy name
+  /** \brief construct a strategy instance
+   *  \param forwarder a reference to the forwarder, used to enable actions and accessors.
+   *  \note Strategy subclass constructor should not retain a reference to the forwarder.
+   */
+  explicit
+  Strategy(Forwarder& forwarder);
 
   virtual
   ~Strategy();
 
-  /** \return a Name that represents the strategy program
+#ifdef DOXYGEN
+  /** \return strategy program name
+   *
+   *  The strategy name is defined by the strategy program.
+   *  It must end with a version component.
+   */
+  static const Name&
+  getStrategyName();
+#endif
+
+  /** \return strategy instance name
+   *
+   *  The instance name is assigned during instantiation.
+   *  It contains a version component, and may have extra parameter components.
    */
   const Name&
-  getName() const
+  getInstanceName() const
   {
     return m_name;
   }
@@ -127,6 +181,13 @@ public: // triggers
   afterReceiveNack(const Face& inFace, const lp::Nack& nack,
                    const shared_ptr<pit::Entry>& pitEntry);
 
+  /** \brief trigger after Interest dropped for exceeding allowed retransmissions
+   *
+   *  In the base class this method does nothing.
+   */
+  virtual void
+  onDroppedInterest(const Face& outFace, const Interest& interest);
+
 protected: // actions
   /** \brief send Interest to outFace
    *  \param pitEntry PIT entry
@@ -139,18 +200,6 @@ protected: // actions
   {
     m_forwarder.onOutgoingInterest(pitEntry, outFace, interest);
   }
-
-  /** \brief send Interest to outFace
-   *  \param pitEntry PIT entry
-   *  \param outFace face through which to send out the Interest
-   *  \param wantNewNonce if true, a new Nonce will be generated,
-   *                      rather than reusing a Nonce from one of the PIT in-records
-   *  \deprecated use sendInterest(pitEntry, outFace, interest) instead
-   */
-  DEPRECATED(
-  void
-  sendInterest(const shared_ptr<pit::Entry>& pitEntry, Face& outFace,
-               bool wantNewNonce = false));
 
   /** \brief decide that a pending Interest cannot be forwarded
    *  \param pitEntry PIT entry
@@ -213,11 +262,58 @@ protected: // accessors
     return m_forwarder.getFaceTable();
   }
 
+protected: // instance name
+  struct ParsedInstanceName
+  {
+    Name strategyName; ///< strategy name without parameters
+    ndn::optional<uint64_t> version; ///< whether strategyName contains a version component
+    PartialName parameters; ///< parameter components
+  };
+
+  /** \brief parse a strategy instance name
+   *  \param input strategy instance name, may contain version and parameters
+   *  \throw std::invalid_argument input format is unacceptable
+   */
+  static ParsedInstanceName
+  parseInstanceName(const Name& input);
+
+  /** \brief construct a strategy instance name
+   *  \param input strategy instance name, may contain version and parameters
+   *  \param strategyName strategy name with version but without parameters;
+   *                      typically this should be \p getStrategyName()
+   *
+   *  If \p input contains a version component, return \p input unchanged.
+   *  Otherwise, return \p input plus the version component taken from \p strategyName.
+   *  This allows a strategy instance to be constructed with an unversioned name,
+   *  but its final instance name should contain the version.
+   */
+  static Name
+  makeInstanceName(const Name& input, const Name& strategyName);
+
+  /** \brief set strategy instance name
+   *  \note This must be called by strategy subclass constructor.
+   */
+  void
+  setInstanceName(const Name& name)
+  {
+    m_name = name;
+  }
+
+private: // registry
+  typedef std::function<unique_ptr<Strategy>(Forwarder& forwarder, const Name& strategyName)> CreateFunc;
+  typedef std::map<Name, CreateFunc> Registry; // indexed by strategy name
+
+  static Registry&
+  getRegistry();
+
+  static Registry::const_iterator
+  find(const Name& instanceName);
+
 protected: // accessors
   signal::Signal<FaceTable, Face&>& afterAddFace;
   signal::Signal<FaceTable, Face&>& beforeRemoveFace;
 
-private:
+private: // instance fields
   Name m_name;
 
   /** \brief reference to the forwarder
@@ -231,5 +327,19 @@ private:
 
 } // namespace fw
 } // namespace nfd
+
+/** \brief registers a strategy
+ *
+ *  This macro should appear once in .cpp of each strategy.
+ */
+#define NFD_REGISTER_STRATEGY(S)                       \
+static class NfdAuto ## S ## StrategyRegistrationClass \
+{                                                      \
+public:                                                \
+  NfdAuto ## S ## StrategyRegistrationClass()          \
+  {                                                    \
+    ::nfd::fw::Strategy::registerType<S>();            \
+  }                                                    \
+} g_nfdAuto ## S ## StrategyRegistrationVariable
 
 #endif // NFD_DAEMON_FW_STRATEGY_HPP

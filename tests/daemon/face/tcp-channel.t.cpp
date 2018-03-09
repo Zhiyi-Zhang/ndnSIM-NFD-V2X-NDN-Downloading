@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,26 +26,27 @@
 #include "tcp-channel-fixture.hpp"
 
 #include "test-ip.hpp"
-
 #include <boost/mpl/vector.hpp>
 
 namespace nfd {
+namespace face {
 namespace tests {
 
 BOOST_AUTO_TEST_SUITE(Face)
 BOOST_FIXTURE_TEST_SUITE(TestTcpChannel, TcpChannelFixture)
 
-using AddressFamilies = boost::mpl::vector<boost::asio::ip::address_v4,
-                                           boost::asio::ip::address_v6>;
+using AddressFamilies = boost::mpl::vector<
+  std::integral_constant<AddressFamily, AddressFamily::V4>,
+  std::integral_constant<AddressFamily, AddressFamily::V6>>;
 
-BOOST_AUTO_TEST_CASE_TEMPLATE(ConnectTimeout, A, AddressFamilies)
+BOOST_AUTO_TEST_CASE_TEMPLATE(ConnectTimeout, F, AddressFamilies)
 {
-  auto address = getTestIp<A>(LoopbackAddress::Yes);
+  auto address = getTestIp(F::value, AddressScope::Loopback);
   SKIP_IF_IP_UNAVAILABLE(address);
   // do not listen
 
-  auto channel = this->makeChannel(A());
-  channel->connect(tcp::Endpoint(address, 7040), false,
+  auto channel = this->makeChannel(typename IpAddressFromFamily<F::value>::type());
+  channel->connect(tcp::Endpoint(address, 7040), {},
     [this] (const shared_ptr<nfd::Face>&) {
       BOOST_FAIL("Connect succeeded when it should have failed");
       this->limitedIo.afterOp();
@@ -64,4 +65,5 @@ BOOST_AUTO_TEST_SUITE_END() // TestTcpChannel
 BOOST_AUTO_TEST_SUITE_END() // Face
 
 } // namespace tests
+} // namespace face
 } // namespace nfd

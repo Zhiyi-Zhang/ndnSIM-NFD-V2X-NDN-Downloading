@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -63,14 +63,13 @@ Transport::Transport()
   , m_persistency(ndn::nfd::FACE_PERSISTENCY_NONE)
   , m_linkType(ndn::nfd::LINK_TYPE_NONE)
   , m_mtu(MTU_INVALID)
+  , m_sendQueueCapacity(QUEUE_UNSUPPORTED)
   , m_state(TransportState::UP)
   , m_expirationTime(time::steady_clock::TimePoint::max())
 {
 }
 
-Transport::~Transport()
-{
-}
+Transport::~Transport() = default;
 
 void
 Transport::setFaceAndLinkService(Face& face, LinkService& service)
@@ -91,7 +90,7 @@ Transport::close()
 
   this->setState(TransportState::CLOSING);
   this->doClose();
-  // warning: don't access any fields after this:
+  // warning: don't access any members after this:
   // the Transport may be deallocated if doClose changes state to CLOSED
 }
 
@@ -127,23 +126,55 @@ Transport::receive(Packet&& packet)
   m_service->receivePacket(std::move(packet));
 }
 
+ssize_t
+Transport::getSendQueueLength()
+{
+  return QUEUE_UNSUPPORTED;
+}
+
+bool
+Transport::canChangePersistencyTo(ndn::nfd::FacePersistency newPersistency) const
+{
+  // not changing, or setting initial persistency in subclass constructor
+  if (m_persistency == newPersistency || m_persistency == ndn::nfd::FACE_PERSISTENCY_NONE) {
+    return true;
+  }
+
+  if (newPersistency == ndn::nfd::FACE_PERSISTENCY_NONE) {
+    NFD_LOG_FACE_TRACE("cannot change persistency to NONE");
+    return false;
+  }
+
+  return this->canChangePersistencyToImpl(newPersistency);
+}
+
+bool
+Transport::canChangePersistencyToImpl(ndn::nfd::FacePersistency newPersistency) const
+{
+  return false;
+}
+
 void
 Transport::setPersistency(ndn::nfd::FacePersistency newPersistency)
 {
+  BOOST_ASSERT(canChangePersistencyTo(newPersistency));
+
   if (m_persistency == newPersistency) {
     return;
   }
 
-  if (newPersistency == ndn::nfd::FACE_PERSISTENCY_NONE) {
-    throw std::runtime_error("invalid persistency transition");
-  }
-
-  if (m_persistency != ndn::nfd::FACE_PERSISTENCY_NONE) {
-    this->beforeChangePersistency(newPersistency);
-    NFD_LOG_FACE_DEBUG("setPersistency " << m_persistency << " -> " << newPersistency);
-  }
-
+  auto oldPersistency = m_persistency;
   m_persistency = newPersistency;
+
+  if (oldPersistency != ndn::nfd::FACE_PERSISTENCY_NONE) {
+    NFD_LOG_FACE_INFO("setPersistency " << oldPersistency << " -> " << newPersistency);
+    this->afterChangePersistency(oldPersistency);
+  }
+}
+
+void
+Transport::afterChangePersistency(ndn::nfd::FacePersistency oldPersistency)
+{
 }
 
 void
@@ -174,7 +205,7 @@ Transport::setState(TransportState newState)
   }
 
   if (!isValid) {
-    throw std::runtime_error("invalid state transition");
+    BOOST_THROW_EXCEPTION(std::runtime_error("invalid state transition"));
   }
 
   NFD_LOG_FACE_INFO("setState " << m_state << " -> " << newState);
@@ -182,7 +213,7 @@ Transport::setState(TransportState newState)
   TransportState oldState = m_state;
   m_state = newState;
   afterStateChange(oldState, newState);
-  // warning: don't access any fields after this:
+  // warning: don't access any members after this:
   // the Transport may be deallocated in the signal handler if newState is CLOSED
 }
 

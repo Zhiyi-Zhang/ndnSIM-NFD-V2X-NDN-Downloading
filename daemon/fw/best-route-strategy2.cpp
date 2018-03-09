@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -31,19 +31,34 @@ namespace nfd {
 namespace fw {
 
 NFD_LOG_INIT("BestRouteStrategy2");
-
-const Name BestRouteStrategy2::STRATEGY_NAME("ndn:/localhost/nfd/strategy/best-route/%FD%04");
 NFD_REGISTER_STRATEGY(BestRouteStrategy2);
 
 const time::milliseconds BestRouteStrategy2::RETX_SUPPRESSION_INITIAL(10);
 const time::milliseconds BestRouteStrategy2::RETX_SUPPRESSION_MAX(250);
 
 BestRouteStrategy2::BestRouteStrategy2(Forwarder& forwarder, const Name& name)
-  : Strategy(forwarder, name)
+  : Strategy(forwarder)
+  , ProcessNackTraits(this)
   , m_retxSuppression(RETX_SUPPRESSION_INITIAL,
                       RetxSuppressionExponential::DEFAULT_MULTIPLIER,
                       RETX_SUPPRESSION_MAX)
 {
+  ParsedInstanceName parsed = parseInstanceName(name);
+  if (!parsed.parameters.empty()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument("BestRouteStrategy2 does not accept parameters"));
+  }
+  if (parsed.version && *parsed.version != getStrategyName()[-1].toVersion()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument(
+      "BestRouteStrategy2 does not support version " + to_string(*parsed.version)));
+  }
+  this->setInstanceName(makeInstanceName(name, getStrategyName()));
+}
+
+const Name&
+BestRouteStrategy2::getStrategyName()
+{
+  static Name strategyName("/localhost/nfd/strategy/best-route/%FD%05");
+  return strategyName;
 }
 
 /** \brief determines whether a NextHop is eligible
@@ -63,8 +78,8 @@ isNextHopEligible(const Face& inFace, const Interest& interest,
 {
   const Face& outFace = nexthop.getFace();
 
-  // do not forward back to the same face
-  if (&outFace == &inFace)
+  // do not forward back to the same face, unless it is ad hoc
+  if (outFace.getId() == inFace.getId() && outFace.getLinkType() != ndn::nfd::LINK_TYPE_AD_HOC)
     return false;
 
   // forwarding would violate scope
@@ -109,8 +124,8 @@ void
 BestRouteStrategy2::afterReceiveInterest(const Face& inFace, const Interest& interest,
                                          const shared_ptr<pit::Entry>& pitEntry)
 {
-  RetxSuppression::Result suppression = m_retxSuppression.decide(inFace, interest, *pitEntry);
-  if (suppression == RetxSuppression::SUPPRESS) {
+  RetxSuppressionResult suppression = m_retxSuppression.decidePerPitEntry(*pitEntry);
+  if (suppression == RetxSuppressionResult::SUPPRESS) {
     NFD_LOG_DEBUG(interest << " from=" << inFace.getId()
                            << " suppressed");
     return;
@@ -120,7 +135,7 @@ BestRouteStrategy2::afterReceiveInterest(const Face& inFace, const Interest& int
   const fib::NextHopList& nexthops = fibEntry.getNextHops();
   fib::NextHopList::const_iterator it = nexthops.end();
 
-  if (suppression == RetxSuppression::NEW) {
+  if (suppression == RetxSuppressionResult::NEW) {
     // forward to nexthop with lowest cost except downstream
     it = std::find_if(nexthops.begin(), nexthops.end(),
       bind(&isNextHopEligible, cref(inFace), interest, _1, pitEntry,
@@ -169,69 +184,11 @@ BestRouteStrategy2::afterReceiveInterest(const Face& inFace, const Interest& int
   }
 }
 
-/** \return less severe NackReason between x and y
- *
- *  lp::NackReason::NONE is treated as most severe
- */
-inline lp::NackReason
-compareLessSevere(lp::NackReason x, lp::NackReason y)
-{
-  if (x == lp::NackReason::NONE) {
-    return y;
-  }
-  if (y == lp::NackReason::NONE) {
-    return x;
-  }
-  return static_cast<lp::NackReason>(std::min(static_cast<int>(x), static_cast<int>(y)));
-}
-
 void
 BestRouteStrategy2::afterReceiveNack(const Face& inFace, const lp::Nack& nack,
                                      const shared_ptr<pit::Entry>& pitEntry)
 {
-  int nOutRecordsNotNacked = 0;
-  Face* lastFaceNotNacked = nullptr;
-  lp::NackReason leastSevereReason = lp::NackReason::NONE;
-  for (const pit::OutRecord& outR : pitEntry->getOutRecords()) {
-    const lp::NackHeader* inNack = outR.getIncomingNack();
-    if (inNack == nullptr) {
-      ++nOutRecordsNotNacked;
-      lastFaceNotNacked = &outR.getFace();
-      continue;
-    }
-
-    leastSevereReason = compareLessSevere(leastSevereReason, inNack->getReason());
-  }
-
-  lp::NackHeader outNack;
-  outNack.setReason(leastSevereReason);
-
-  if (nOutRecordsNotNacked == 1) {
-    BOOST_ASSERT(lastFaceNotNacked != nullptr);
-    pit::InRecordCollection::iterator inR = pitEntry->getInRecord(*lastFaceNotNacked);
-    if (inR != pitEntry->in_end()) {
-      // one out-record not Nacked, which is also a downstream
-      NFD_LOG_DEBUG(nack.getInterest() << " nack-from=" << inFace.getId() <<
-                    " nack=" << nack.getReason() <<
-                    " nack-to(bidirectional)=" << lastFaceNotNacked->getId() <<
-                    " out-nack=" << outNack.getReason());
-      this->sendNack(pitEntry, *lastFaceNotNacked, outNack);
-      return;
-    }
-  }
-
-  if (nOutRecordsNotNacked > 0) {
-    NFD_LOG_DEBUG(nack.getInterest() << " nack-from=" << inFace.getId() <<
-                  " nack=" << nack.getReason() <<
-                  " waiting=" << nOutRecordsNotNacked);
-    // continue waiting
-    return;
-  }
-
-  NFD_LOG_DEBUG(nack.getInterest() << " nack-from=" << inFace.getId() <<
-                " nack=" << nack.getReason() <<
-                " nack-to=all out-nack=" << outNack.getReason());
-  this->sendNacks(pitEntry, outNack);
+  this->processNack(inFace, nack, pitEntry);
 }
 
 } // namespace fw

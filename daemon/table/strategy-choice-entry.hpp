@@ -47,15 +47,23 @@ class Entry : noncopyable
 public:
   Entry(const Name& prefix);
 
+  ~Entry();
+
+  /** \return name prefix on which this strategy choice is applied
+   */
   const Name&
   getPrefix() const
   {
     return m_prefix;
   }
 
+  /** \return strategy instance name
+   */
   const Name&
-  getStrategyName() const;
+  getStrategyInstanceName() const;
 
+  /** \return strategy instance
+   */
   fw::Strategy&
   getStrategy() const
   {
@@ -64,17 +72,13 @@ public:
   }
 
   void
-  setStrategy(fw::Strategy& strategy)
-  {
-    m_strategy = &strategy;
-  }
+  setStrategy(unique_ptr<fw::Strategy> strategy);
 
 private:
   Name m_prefix;
-  fw::Strategy* m_strategy;
+  unique_ptr<fw::Strategy> m_strategy;
 
   name_tree::Entry* m_nameTreeEntry;
-
   friend class name_tree::Entry;
 };
 

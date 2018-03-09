@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,57 +24,82 @@
  */
 
 #include "test-ip.hpp"
-
-#include "core/network-interface.hpp"
+#include "test-netif.hpp"
 
 namespace nfd {
+namespace face {
 namespace tests {
-namespace {
+
+std::ostream&
+operator<<(std::ostream& os, AddressFamily family)
+{
+  switch (family) {
+    case AddressFamily::V4:
+      return os << "IPv4";
+    case AddressFamily::V6:
+      return os << "IPv6";
+    case AddressFamily::Any:
+      return os << "Any";
+  }
+  return os << '?';
+}
+
+std::ostream&
+operator<<(std::ostream& os, AddressScope scope)
+{
+  switch (scope) {
+    case AddressScope::Loopback:
+      return os << "Loopback";
+    case AddressScope::LinkLocal:
+      return os << "LinkLocal";
+    case AddressScope::Global:
+      return os << "Global";
+    case AddressScope::Any:
+      return os << "Any";
+  }
+  return os << '?';
+}
+
+std::ostream&
+operator<<(std::ostream& os, MulticastInterface mcast)
+{
+  switch (mcast) {
+    case MulticastInterface::No:
+      return os << "No";
+    case MulticastInterface::Yes:
+      return os << "Yes";
+    case MulticastInterface::Any:
+      return os << "Any";
+  }
+  return os << '?';
+}
 
 template<typename E>
-bool
+static bool
 matchTristate(E e, bool b)
 {
-  return (e == E::DontCare) ||
+  return (e == E::Any) ||
          (e == E::Yes && b) ||
          (e == E::No && !b);
 }
 
-} // unnamed namespace
-
-template<>
-boost::asio::ip::address_v4
-getTestIp(LoopbackAddress loopback, MulticastInterface mcast)
+boost::asio::ip::address
+getTestIp(AddressFamily family, AddressScope scope, MulticastInterface mcast)
 {
-  for (const auto& interface : listNetworkInterfaces()) {
-    if (interface.isUp() &&
-        matchTristate(loopback, interface.isLoopback()) &&
-        matchTristate(mcast, interface.isMulticastCapable())) {
-      for (const auto& address : interface.ipv4Addresses) {
-        if (!address.is_unspecified() &&
-            matchTristate(loopback, address.is_loopback())) {
-          return address;
-        }
-      }
+  for (const auto& interface : collectNetworkInterfaces()) {
+    if (!interface->isUp() ||
+        !matchTristate(mcast, interface->canMulticast())) {
+      continue;
     }
-  }
-  return {};
-}
-
-template<>
-boost::asio::ip::address_v6
-getTestIp(LoopbackAddress loopback, MulticastInterface mcast)
-{
-  for (const auto& interface : listNetworkInterfaces()) {
-    if (interface.isUp() &&
-        matchTristate(loopback, interface.isLoopback()) &&
-        matchTristate(mcast, interface.isMulticastCapable())) {
-      for (const auto& address : interface.ipv6Addresses) {
-        if (!address.is_unspecified() &&
-            !address.is_link_local() && // see #1428
-            matchTristate(loopback, address.is_loopback())) {
-          return address;
-        }
+    for (const auto& address : interface->getNetworkAddresses()) {
+      if (!address.getIp().is_unspecified() &&
+          (family == AddressFamily::Any ||
+           static_cast<int>(family) == static_cast<int>(address.getFamily())) &&
+          (scope == AddressScope::Any ||
+           static_cast<int>(scope) == static_cast<int>(address.getScope())) &&
+          (scope != AddressScope::Loopback ||
+           address.getIp().is_loopback())) {
+        return address.getIp();
       }
     }
   }
@@ -82,4 +107,5 @@ getTestIp(LoopbackAddress loopback, MulticastInterface mcast)
 }
 
 } // namespace tests
+} // namespace face
 } // namespace nfd

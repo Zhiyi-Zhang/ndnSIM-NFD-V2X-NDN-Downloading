@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -35,26 +35,23 @@ class Entry;
 
 /** \brief a single hash value
  */
-typedef size_t HashValue;
+using HashValue = size_t;
 
 /** \brief a sequence of hash values
  *  \sa computeHashes
  */
-typedef std::vector<HashValue> HashSequence;
+using HashSequence = std::vector<HashValue>;
 
-/** \brief computes a single hash value
- *  \param name base name
- *  \param prefixLen if non-negative, compute hash value for name.getPrefix(prefixLen);
- *                   if negative, compute hash value for complete name
+/** \brief computes hash value of \p name.getPrefix(prefixLen)
  */
 HashValue
-computeHash(const Name& name, ssize_t prefixLen = -1);
+computeHash(const Name& name, size_t prefixLen = std::numeric_limits<size_t>::max());
 
-/** \brief computes hash values for each prefix of name
+/** \brief computes hash values for each prefix of \p name.getPrefix(prefixLen)
  *  \return a hash sequence, where the i-th hash value equals computeHash(name, i)
  */
 HashSequence
-computeHashes(const Name& name);
+computeHashes(const Name& name, size_t prefixLen = std::numeric_limits<size_t>::max());
 
 /** \brief a hashtable node
  *

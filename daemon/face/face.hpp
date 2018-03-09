@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -23,13 +23,13 @@
  * NFD, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef NFD_DAEMON_FACE_HPP
-#define NFD_DAEMON_FACE_HPP
+#ifndef NFD_DAEMON_FACE_FACE_HPP
+#define NFD_DAEMON_FACE_FACE_HPP
 
-#include "transport.hpp"
-#include "link-service.hpp"
 #include "face-counters.hpp"
 #include "face-log.hpp"
+#include "link-service.hpp"
+#include "transport.hpp"
 
 namespace nfd {
 namespace face {
@@ -107,6 +107,10 @@ public: // upper interface connected to forwarding
    */
   signal::Signal<LinkService, lp::Nack>& afterReceiveNack;
 
+  /** \brief signals on Interest dropped by reliability system for exceeding allowed number of retx
+   */
+  signal::Signal<LinkService, Interest>& onDroppedInterest;
+
 public: // static properties
   /** \return face ID
    */
@@ -118,6 +122,12 @@ public: // static properties
    */
   void
   setId(FaceId id);
+
+  void
+  setMetric(uint64_t metric);
+
+  uint64_t
+  getMetric() const;
 
   /** \return a FaceUri representing local endpoint
    */
@@ -186,6 +196,7 @@ private:
   unique_ptr<LinkService> m_service;
   unique_ptr<Transport> m_transport;
   FaceCounters m_counters;
+  uint64_t m_metric;
 };
 
 inline LinkService*
@@ -228,6 +239,18 @@ inline void
 Face::setId(FaceId id)
 {
   m_id = id;
+}
+
+inline void
+Face::setMetric(uint64_t metric)
+{
+  m_metric = metric;
+}
+
+inline uint64_t
+Face::getMetric() const
+{
+  return m_metric;
 }
 
 inline FaceUri
@@ -293,13 +316,6 @@ Face::getCounters() const
 std::ostream&
 operator<<(std::ostream& os, const FaceLogHelper<Face>& flh);
 
-template<typename T>
-typename std::enable_if<std::is_base_of<Face, T>::value, std::ostream&>::type
-operator<<(std::ostream& os, const FaceLogHelper<T>& flh)
-{
-  return os << FaceLogHelper<Face>(flh.obj);
-}
-
 } // namespace face
 
 using face::FaceId;
@@ -307,4 +323,4 @@ using face::Face;
 
 } // namespace nfd
 
-#endif // NFD_DAEMON_FACE_HPP
+#endif // NFD_DAEMON_FACE_FACE_HPP

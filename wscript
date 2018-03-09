@@ -1,7 +1,7 @@
 # -*- Mode: python; py-indent-offset: 4; indent-tabs-mode: nil; coding: utf-8; -*-
 
 """
-Copyright (c) 2014-2016,  Regents of the University of California,
+Copyright (c) 2014-2017,  Regents of the University of California,
                           Arizona Board of Regents,
                           Colorado State University,
                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,10 +24,10 @@ You should have received a copy of the GNU General Public License along with
 NFD, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-VERSION = "0.5.0"
+VERSION = "0.6.1"
 APPNAME = "nfd"
-BUGREPORT = "http://redmine.named-data.net/projects/nfd"
-URL = "http://named-data.net/doc/NFD/"
+BUGREPORT = "https://redmine.named-data.net/projects/nfd"
+URL = "https://named-data.net/doc/NFD/"
 GIT_TAG_PREFIX = "NFD-"
 
 from waflib import Logs, Utils, Context
@@ -105,29 +105,31 @@ main(int, char**)
   return 0;
 }
 '''):
-      Logs.warn('Dropping privileges is not supported on this platform')
+        Logs.warn('Dropping privileges is not supported on this platform')
 
-    conf.check_cxx(header_name='ifaddrs.h', mandatory=False)
     conf.check_cxx(header_name='valgrind/valgrind.h', define_name='HAVE_VALGRIND', mandatory=False)
 
-    boost_libs = 'system chrono program_options thread log log_setup'
     if conf.options.with_tests:
         conf.env['WITH_TESTS'] = 1
         conf.define('WITH_TESTS', 1)
-        boost_libs += ' unit_test_framework'
 
     if conf.options.with_other_tests:
         conf.env['WITH_OTHER_TESTS'] = 1
+        conf.define('WITH_OTHER_TESTS', 1)
+
+    boost_libs = 'system chrono program_options thread log log_setup'
+    if conf.options.with_tests or conf.options.with_other_tests:
+        boost_libs += ' unit_test_framework'
 
     conf.check_boost(lib=boost_libs, mt=True)
     if conf.env.BOOST_VERSION_NUMBER < 105400:
         Logs.error("Minimum required boost version is 1.54.0")
         Logs.error("Please upgrade your distribution or install custom boost libraries" +
-                   " (http://redmine.named-data.net/projects/nfd/wiki/Boost_FAQ)")
+                   " (https://redmine.named-data.net/projects/nfd/wiki/Boost_FAQ)")
         return
 
     if conf.env['CXX_NAME'] == 'clang' and conf.env.BOOST_VERSION_NUMBER < 105800:
-        conf.define('BOOST_ASIO_HAS_STD_ARRAY', 1) # Workaround for http://redmine.named-data.net/issues/3360#note-14
+        conf.define('BOOST_ASIO_HAS_STD_ARRAY', 1) # Workaround for https://redmine.named-data.net/issues/3360#note-14
         conf.define('BOOST_ASIO_HAS_STD_CHRONO', 1) # Solution documented at https://redmine.named-data.net/issues/3588#note-10
 
     conf.load('unix-socket')
@@ -140,8 +142,8 @@ main(int, char**)
                                  errmsg='not found, but required for Ethernet face support. '
                                         'Specify --without-libpcap to disable Ethernet face support.')
         else:
-            Logs.warn('Warning: Ethernet face support is not supported on this platform with Boost libraries version 1.56. '
-                      'See http://redmine.named-data.net/issues/1877 for more details')
+            Logs.warn('Warning: Ethernet face is not supported on this platform with Boost libraries version 1.56. '
+                      'See https://redmine.named-data.net/issues/1877 for more details')
     if conf.env['HAVE_LIBPCAP']:
         conf.check_cxx(function_name='pcap_set_immediate_mode', header_name='pcap/pcap.h',
                        cxxflags='-Wno-error', use='LIBPCAP', mandatory=False)
@@ -150,6 +152,8 @@ main(int, char**)
         conf.define('HAVE_CUSTOM_LOGGER', 1)
         conf.env['INCLUDES_CUSTOM_LOGGER'] = [conf.options.with_custom_logger]
         conf.env['HAVE_CUSTOM_LOGGER'] = 1
+
+    conf.check_compiler_flags()
 
     conf.load('coverage')
 
@@ -201,7 +205,8 @@ def build(bld):
         name='daemon-objects',
         features='cxx',
         source=bld.path.ant_glob(['daemon/**/*.cpp'],
-                                 excl=['daemon/face/ethernet-*.cpp',
+                                 excl=['daemon/face/*ethernet*.cpp',
+                                       'daemon/face/*pcap*.cpp',
                                        'daemon/face/unix-*.cpp',
                                        'daemon/face/websocket-*.cpp',
                                        'daemon/main.cpp']),
@@ -210,7 +215,8 @@ def build(bld):
         export_includes='daemon')
 
     if bld.env['HAVE_LIBPCAP']:
-        nfd_objects.source += bld.path.ant_glob('daemon/face/ethernet-*.cpp')
+        nfd_objects.source += bld.path.ant_glob('daemon/face/*ethernet*.cpp')
+        nfd_objects.source += bld.path.ant_glob('daemon/face/*pcap*.cpp')
         nfd_objects.use += ' LIBPCAP'
 
     if bld.env['HAVE_UNIX_SOCKETS']:
@@ -218,6 +224,9 @@ def build(bld):
 
     if bld.env['HAVE_WEBSOCKET']:
         nfd_objects.source += bld.path.ant_glob('daemon/face/websocket-*.cpp')
+
+    if bld.env['WITH_OTHER_TESTS']:
+        nfd_objects.source += bld.path.ant_glob('tests/other/fw/*.cpp')
 
     rib_objects = bld(
         target='rib-objects',
@@ -250,8 +259,6 @@ def build(bld):
             install_path="${MANDIR}/",
             VERSION=VERSION)
         bld.symlink_as('${MANDIR}/man1/nfdc-channel.1', 'nfdc-face.1')
-        bld.symlink_as('${MANDIR}/man1/nfdc-create.1', 'nfdc-face.1')
-        bld.symlink_as('${MANDIR}/man1/nfdc-destroy.1', 'nfdc-face.1')
         bld.symlink_as('${MANDIR}/man1/nfdc-fib.1', 'nfdc-route.1')
         bld.symlink_as('${MANDIR}/man1/nfdc-register.1', 'nfdc-route.1')
         bld.symlink_as('${MANDIR}/man1/nfdc-unregister.1', 'nfdc-route.1')

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -29,14 +29,16 @@
 #include "core/global-io.hpp"
 
 namespace nfd {
+namespace face {
 
 NFD_LOG_INIT("WebSocketChannel");
 
 WebSocketChannel::WebSocketChannel(const websocket::Endpoint& localEndpoint)
   : m_localEndpoint(localEndpoint)
-  , m_pingInterval(10000)
+  , m_pingInterval(10_s)
 {
   setUri(FaceUri(m_localEndpoint, "ws"));
+  NFD_LOG_CHAN_INFO("Creating channel");
 
   // Be quiet
   m_server.clear_access_channels(websocketpp::log::alevel::all);
@@ -77,10 +79,10 @@ WebSocketChannel::handlePongTimeout(websocketpp::connection_hdl hdl)
 {
   auto it = m_channelFaces.find(hdl);
   if (it != m_channelFaces.end()) {
-    static_cast<face::WebSocketTransport*>(it->second->getTransport())->handlePongTimeout();
+    static_cast<WebSocketTransport*>(it->second->getTransport())->handlePongTimeout();
   }
   else {
-    NFD_LOG_WARN("Pong timeout on unknown transport");
+    NFD_LOG_CHAN_WARN("Pong timeout on unknown transport");
   }
 }
 
@@ -89,10 +91,10 @@ WebSocketChannel::handlePong(websocketpp::connection_hdl hdl)
 {
   auto it = m_channelFaces.find(hdl);
   if (it != m_channelFaces.end()) {
-    static_cast<face::WebSocketTransport*>(it->second->getTransport())->handlePong();
+    static_cast<WebSocketTransport*>(it->second->getTransport())->handlePong();
   }
   else {
-    NFD_LOG_WARN("Pong received on unknown transport");
+    NFD_LOG_CHAN_WARN("Pong received on unknown transport");
   }
 }
 
@@ -102,20 +104,23 @@ WebSocketChannel::handleMessage(websocketpp::connection_hdl hdl,
 {
   auto it = m_channelFaces.find(hdl);
   if (it != m_channelFaces.end()) {
-    static_cast<face::WebSocketTransport*>(it->second->getTransport())->receiveMessage(msg->get_payload());
+    static_cast<WebSocketTransport*>(it->second->getTransport())->receiveMessage(msg->get_payload());
   }
   else {
-    NFD_LOG_WARN("Message received on unknown transport");
+    NFD_LOG_CHAN_WARN("Message received on unknown transport");
   }
 }
 
 void
 WebSocketChannel::handleOpen(websocketpp::connection_hdl hdl)
 {
-  auto linkService = make_unique<face::GenericLinkService>();
-  auto transport = make_unique<face::WebSocketTransport>(hdl, ref(m_server), m_pingInterval);
+  NFD_LOG_CHAN_TRACE("Incoming connection from " << m_server.get_con_from_hdl(hdl)->get_remote_endpoint());
+
+  auto linkService = make_unique<GenericLinkService>();
+  auto transport = make_unique<WebSocketTransport>(hdl, ref(m_server), m_pingInterval);
   auto face = make_shared<Face>(std::move(linkService), std::move(transport));
 
+  BOOST_ASSERT(m_channelFaces.count(hdl) == 0);
   m_channelFaces[hdl] = face;
   connectFaceClosedSignal(*face, [this, hdl] { m_channelFaces.erase(hdl); });
 
@@ -130,27 +135,24 @@ WebSocketChannel::handleClose(websocketpp::connection_hdl hdl)
     it->second->close();
   }
   else {
-    NFD_LOG_WARN("Close on unknown transport");
+    NFD_LOG_CHAN_WARN("Close on unknown transport");
   }
 }
 
 void
 WebSocketChannel::listen(const FaceCreatedCallback& onFaceCreated)
 {
-  if (m_server.is_listening()) {
-    NFD_LOG_WARN("[" << m_localEndpoint << "] Already listening");
+  if (isListening()) {
+    NFD_LOG_CHAN_WARN("Already listening");
     return;
   }
 
   m_onFaceCreatedCallback = onFaceCreated;
+
   m_server.listen(m_localEndpoint);
   m_server.start_accept();
+  NFD_LOG_CHAN_DEBUG("Started listening");
 }
 
-size_t
-WebSocketChannel::size() const
-{
-  return m_channelFaces.size();
-}
-
+} // namespace face
 } // namespace nfd

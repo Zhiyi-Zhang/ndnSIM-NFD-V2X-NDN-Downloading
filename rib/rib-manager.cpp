@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,10 +24,18 @@
  */
 
 #include "rib-manager.hpp"
-#include "core/global-io.hpp"
+#include "readvertise/readvertise.hpp"
+#include "readvertise/client-to-nlsr-readvertise-policy.hpp"
+#include "readvertise/nfd-rib-readvertise-destination.hpp"
+
+#include "core/fib-max-depth.hpp"
 #include "core/logger.hpp"
 #include "core/scheduler.hpp"
+
 #include <ndn-cxx/lp/tags.hpp>
+#include <ndn-cxx/mgmt/nfd/control-command.hpp>
+#include <ndn-cxx/mgmt/nfd/control-parameters.hpp>
+#include <ndn-cxx/mgmt/nfd/control-response.hpp>
 #include <ndn-cxx/mgmt/nfd/face-status.hpp>
 #include <ndn-cxx/mgmt/nfd/rib-entry.hpp>
 
@@ -41,6 +49,7 @@ const Name RibManager::LOCAL_HOP_TOP_PREFIX = "/localhop/nfd";
 const std::string RibManager::MGMT_MODULE_NAME = "rib";
 const Name RibManager::FACES_LIST_DATASET_PREFIX = "/localhost/nfd/faces/list";
 const time::seconds RibManager::ACTIVE_FACE_FETCH_INTERVAL = time::seconds(300);
+const Name RibManager::READVERTISE_NLSR_PREFIX = "/localhost/nlsr";
 
 RibManager::RibManager(Dispatcher& dispatcher,
                        ndn::Face& face,
@@ -67,10 +76,7 @@ RibManager::RibManager(Dispatcher& dispatcher,
   registerStatusDatasetHandler("list", bind(&RibManager::listEntries, this, _1, _2, _3));
 }
 
-RibManager::~RibManager()
-{
-  scheduler::cancel(m_activeFaceFetchEvent);
-}
+RibManager::~RibManager() = default;
 
 void
 RibManager::registerWithNfd()
@@ -127,6 +133,7 @@ RibManager::onConfig(const ConfigSection& configSection,
                      const std::string& filename)
 {
   bool isAutoPrefixPropagatorEnabled = false;
+  bool wantReadvertiseToNlsr = false;
 
   for (const auto& item : configSection) {
     if (item.first == "localhost_security") {
@@ -147,6 +154,9 @@ RibManager::onConfig(const ConfigSection& configSection,
 
       m_prefixPropagator.enable();
     }
+    else if (item.first == "readvertise_nlsr") {
+      wantReadvertiseToNlsr = ConfigFile::parseYesNo(item, "rib.readvertise_nlsr");
+    }
     else {
       BOOST_THROW_EXCEPTION(Error("Unrecognized rib property: " + item.first));
     }
@@ -154,6 +164,18 @@ RibManager::onConfig(const ConfigSection& configSection,
 
   if (!isAutoPrefixPropagatorEnabled) {
     m_prefixPropagator.disable();
+  }
+
+  if (wantReadvertiseToNlsr && m_readvertiseNlsr == nullptr) {
+    NFD_LOG_DEBUG("Enabling readvertise-to-nlsr.");
+    m_readvertiseNlsr.reset(new Readvertise(
+      m_rib,
+      make_unique<ClientToNlsrReadvertisePolicy>(),
+      make_unique<NfdRibReadvertiseDestination>(m_nfdController, READVERTISE_NLSR_PREFIX, m_rib)));
+  }
+  else if (!wantReadvertiseToNlsr && m_readvertiseNlsr != nullptr) {
+    NFD_LOG_DEBUG("Disabling readvertise-to-nlsr.");
+    m_readvertiseNlsr.reset();
   }
 }
 
@@ -177,6 +199,12 @@ RibManager::registerEntry(const Name& topPrefix, const Interest& interest,
                           ControlParameters parameters,
                           const ndn::mgmt::CommandContinuation& done)
 {
+  if (parameters.getName().size() > FIB_MAX_DEPTH) {
+    done(ControlResponse(414, "Route prefix cannot exceed " + ndn::to_string(FIB_MAX_DEPTH) +
+                              " components"));
+    return;
+  }
+
   setFaceForSelfRegistration(interest, parameters);
 
   // Respond since command is valid and authorized
@@ -189,22 +217,21 @@ RibManager::registerEntry(const Name& topPrefix, const Interest& interest,
   route.flags = parameters.getFlags();
 
   if (parameters.hasExpirationPeriod() &&
-      parameters.getExpirationPeriod() != time::milliseconds::max())
-  {
+      parameters.getExpirationPeriod() != time::milliseconds::max()) {
     route.expires = time::steady_clock::now() + parameters.getExpirationPeriod();
 
     // Schedule a new event, the old one will be cancelled during rib insertion.
     scheduler::EventId eventId = scheduler::schedule(parameters.getExpirationPeriod(),
       bind(&Rib::onRouteExpiration, &m_rib, parameters.getName(), route));
 
-    NFD_LOG_TRACE("Scheduled unregistration at: " << route.expires <<
+    NFD_LOG_TRACE("Scheduled unregistration at: " << *route.expires <<
                   " with EventId: " << eventId);
 
     // Set the  NewEventId of this entry
     route.setExpirationEvent(eventId);
   }
   else {
-    route.expires = time::steady_clock::TimePoint::max();
+    route.expires = ndn::nullopt;
   }
 
   NFD_LOG_INFO("Adding route " << parameters.getName() << " nexthop=" << route.faceId
@@ -254,29 +281,24 @@ void
 RibManager::listEntries(const Name& topPrefix, const Interest& interest,
                         ndn::mgmt::StatusDatasetContext& context)
 {
-  for (auto&& ribTableEntry : m_rib) {
-    const auto& ribEntry = *ribTableEntry.second;
-    ndn::nfd::RibEntry record;
-
-    for (auto&& route : ribEntry) {
-      ndn::nfd::Route routeElement;
-      routeElement.setFaceId(route.faceId)
-              .setOrigin(route.origin)
-              .setCost(route.cost)
-              .setFlags(route.flags);
-
-      if (route.expires < time::steady_clock::TimePoint::max()) {
-        routeElement.setExpirationPeriod(time::duration_cast<time::milliseconds>(
-          route.expires - time::steady_clock::now()));
+  auto now = time::steady_clock::now();
+  for (const auto& kv : m_rib) {
+    const RibEntry& entry = *kv.second;
+    ndn::nfd::RibEntry item;
+    item.setName(entry.getName());
+    for (const Route& route : entry.getRoutes()) {
+      ndn::nfd::Route r;
+      r.setFaceId(route.faceId);
+      r.setOrigin(route.origin);
+      r.setCost(route.cost);
+      r.setFlags(route.flags);
+      if (route.expires) {
+        r.setExpirationPeriod(time::duration_cast<time::milliseconds>(*route.expires - now));
       }
-
-      record.addRoute(routeElement);
+      item.addRoute(r);
     }
-
-    record.setName(ribEntry.getName());
-    context.append(record.wireEncode());
+    context.append(item.wireEncode());
   }
-
   context.end();
 }
 
@@ -341,10 +363,7 @@ RibManager::onFaceDestroyedEvent(uint64_t faceId)
 void
 RibManager::scheduleActiveFaceFetch(const time::seconds& timeToWait)
 {
-  scheduler::cancel(m_activeFaceFetchEvent);
-
-  m_activeFaceFetchEvent = scheduler::schedule(timeToWait,
-                                               bind(&RibManager::fetchActiveFaces, this));
+  m_activeFaceFetchEvent = scheduler::schedule(timeToWait, [this] { this->fetchActiveFaces(); });
 }
 
 void
@@ -353,18 +372,16 @@ RibManager::removeInvalidFaces(const std::vector<ndn::nfd::FaceStatus>& activeFa
   NFD_LOG_DEBUG("Checking for invalid face registrations");
 
   FaceIdSet activeFaceIds;
-  for (const ndn::nfd::FaceStatus& item : activeFaces) {
-    activeFaceIds.insert(item.getFaceId());
+  for (const auto& faceStatus : activeFaces) {
+    activeFaceIds.insert(faceStatus.getFaceId());
   }
 
   // Look for face IDs that were registered but not active to find missed
   // face destroyed events
-  for (auto&& faceId : m_registeredFaces) {
+  for (auto faceId : m_registeredFaces) {
     if (activeFaceIds.count(faceId) == 0) {
       NFD_LOG_DEBUG("Removing invalid face ID: " << faceId);
-
-      scheduler::schedule(time::seconds(0),
-                          bind(&RibManager::onFaceDestroyedEvent, this, faceId));
+      scheduler::schedule(time::seconds(0), [this, faceId] { this->onFaceDestroyedEvent(faceId); });
     }
   }
 
@@ -373,7 +390,7 @@ RibManager::removeInvalidFaces(const std::vector<ndn::nfd::FaceStatus>& activeFa
 }
 
 void
-RibManager::onNotification(const FaceEventNotification& notification)
+RibManager::onNotification(const ndn::nfd::FaceEventNotification& notification)
 {
   NFD_LOG_TRACE("onNotification: " << notification);
 
@@ -395,7 +412,7 @@ RibManager::onCommandPrefixAddNextHopSuccess(const Name& prefix,
   Route route;
   route.faceId = result.getFaceId();
   route.origin = ndn::nfd::ROUTE_ORIGIN_APP;
-  route.expires = time::steady_clock::TimePoint::max();
+  route.expires = ndn::nullopt;
   route.flags = ndn::nfd::ROUTE_FLAG_CHILD_INHERIT;
 
   m_rib.insert(prefix, route);

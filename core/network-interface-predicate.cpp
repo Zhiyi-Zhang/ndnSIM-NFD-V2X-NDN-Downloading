@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,8 +26,9 @@
 #include "network-interface-predicate.hpp"
 
 #include "config-file.hpp"
-#include "network-interface.hpp"
 #include "network.hpp"
+
+#include <fnmatch.h>
 
 namespace nfd {
 
@@ -64,7 +65,7 @@ parseList(std::set<std::string>& set, const boost::property_tree::ptree& list, c
     else if (item.first == "ether") {
       // validate ethernet address
       auto addr = item.second.get_value<std::string>();
-      if (ethernet::Address::fromString(addr).isNull()) {
+      if (ndn::ethernet::Address::fromString(addr).isNull()) {
         BOOST_THROW_EXCEPTION(ConfigFile::Error("Malformed ether address \"" + addr +
                                                 "\" in \"" + section + "\" section"));
       }
@@ -95,28 +96,43 @@ NetworkInterfacePredicate::parseBlacklist(const boost::property_tree::ptree& lis
 }
 
 static bool
-doesMatchRule(const NetworkInterfaceInfo& nic, const std::string& rule)
+doesMatchPattern(const std::string& ifname, const std::string& pattern)
+{
+  // use fnmatch(3) to provide unix glob-style matching for interface names
+  // fnmatch returns 0 if there is a match
+  return ::fnmatch(pattern.data(), ifname.data(), 0) == 0;
+}
+
+static bool
+doesMatchRule(const ndn::net::NetworkInterface& netif, const std::string& rule)
 {
   // if '/' is in rule, this is a subnet, check if IP in subnet
   if (rule.find('/') != std::string::npos) {
     Network n = boost::lexical_cast<Network>(rule);
-    for (const auto& addr : nic.ipv4Addresses) {
-      if (n.doesContain(addr)) {
+    for (const auto& addr : netif.getNetworkAddresses()) {
+      if (n.doesContain(addr.getIp())) {
         return true;
       }
     }
   }
 
   return rule == "*" ||
-         nic.name == rule ||
-         nic.etherAddress.toString() == rule;
+         doesMatchPattern(netif.getName(), rule) ||
+         netif.getEthernetAddress().toString() == rule;
 }
 
 bool
-NetworkInterfacePredicate::operator()(const NetworkInterfaceInfo& nic) const
+NetworkInterfacePredicate::operator()(const ndn::net::NetworkInterface& netif) const
 {
-  return std::any_of(m_whitelist.begin(), m_whitelist.end(), bind(&doesMatchRule, nic, _1)) &&
-         std::none_of(m_blacklist.begin(), m_blacklist.end(), bind(&doesMatchRule, nic, _1));
+  return std::any_of(m_whitelist.begin(), m_whitelist.end(), bind(&doesMatchRule, cref(netif), _1)) &&
+         std::none_of(m_blacklist.begin(), m_blacklist.end(), bind(&doesMatchRule, cref(netif), _1));
+}
+
+bool
+NetworkInterfacePredicate::operator==(const NetworkInterfacePredicate& other) const
+{
+  return this->m_whitelist == other.m_whitelist &&
+         this->m_blacklist == other.m_blacklist;
 }
 
 } // namespace nfd

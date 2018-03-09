@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -88,61 +88,6 @@ BOOST_AUTO_TEST_CASE(Localhop)
 }
 
 BOOST_AUTO_TEST_SUITE_END() // WouldViolateScope
-
-BOOST_FIXTURE_TEST_SUITE(ViolatesScope, ScopeControlFixture)
-
-BOOST_AUTO_TEST_CASE(Unrestricted)
-{
-  shared_ptr<Interest> interest = makeInterest("ndn:/ieWRzDsCu");
-  pit::Entry entry(*interest);
-
-  entry.insertOrUpdateInRecord(*nonLocalFace1, *interest);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *nonLocalFace2), false);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *localFace4), false);
-}
-
-BOOST_AUTO_TEST_CASE(Localhost)
-{
-  shared_ptr<Interest> interest = makeInterest("ndn:/localhost/5n1LzIt3");
-  pit::Entry entry(*interest);
-
-  entry.insertOrUpdateInRecord(*localFace3, *interest);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *nonLocalFace2), true);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *localFace4), false);
-}
-
-BOOST_AUTO_TEST_CASE(LocalhopFromLocal)
-{
-  shared_ptr<Interest> interest = makeInterest("ndn:/localhop/YcIKWCRYJ");
-  pit::Entry entry(*interest);
-
-  entry.insertOrUpdateInRecord(*localFace3, *interest);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *nonLocalFace2), false);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *localFace4), false);
-}
-
-BOOST_AUTO_TEST_CASE(LocalhopFromNonLocal)
-{
-  shared_ptr<Interest> interest = makeInterest("ndn:/localhop/x5uFr5IpqY");
-  pit::Entry entry(*interest);
-
-  entry.insertOrUpdateInRecord(*nonLocalFace1, *interest);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *nonLocalFace2), true);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *localFace4), false);
-}
-
-BOOST_AUTO_TEST_CASE(LocalhopFromLocalAndNonLocal)
-{
-  shared_ptr<Interest> interest = makeInterest("ndn:/localhop/gNn2MJAXt");
-  pit::Entry entry(*interest);
-
-  entry.insertOrUpdateInRecord(*nonLocalFace1, *interest);
-  entry.insertOrUpdateInRecord(*localFace3, *interest);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *nonLocalFace2), false);
-  BOOST_CHECK_EQUAL(violatesScope(entry, *localFace4), false);
-}
-
-BOOST_AUTO_TEST_SUITE_END() // ViolatesScope
 
 BOOST_AUTO_TEST_CASE(CanForwardToLegacy)
 {
@@ -257,6 +202,26 @@ BOOST_FIXTURE_TEST_CASE(HasPendingOutRecords, UnitTestTimeFixture)
   BOOST_CHECK_EQUAL(hasPendingOutRecords(entry), true);
   this->advanceClocks(ndn::DEFAULT_INTEREST_LIFETIME, 2);
   BOOST_CHECK_EQUAL(hasPendingOutRecords(entry), false);
+}
+
+BOOST_FIXTURE_TEST_CASE(GetLastOutgoing, UnitTestTimeFixture)
+{
+  auto face1 = make_shared<DummyFace>();
+  auto face2 = make_shared<DummyFace>();
+
+  shared_ptr<Interest> interest = makeInterest("ndn:/c1I7QCtc");
+  pit::Entry entry(*interest);
+
+  time::steady_clock::TimePoint before = time::steady_clock::now();
+
+  entry.insertOrUpdateOutRecord(*face1, *interest);
+  this->advanceClocks(time::milliseconds(1000));
+
+  BOOST_CHECK_EQUAL(getLastOutgoing(entry), before);
+
+  entry.insertOrUpdateOutRecord(*face2, *interest);
+
+  BOOST_CHECK_EQUAL(getLastOutgoing(entry), time::steady_clock::now());
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestPitAlgorithm

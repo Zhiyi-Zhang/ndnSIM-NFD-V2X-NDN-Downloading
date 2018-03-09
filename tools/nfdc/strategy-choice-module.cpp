@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -29,6 +29,124 @@
 namespace nfd {
 namespace tools {
 namespace nfdc {
+
+void
+StrategyChoiceModule::registerCommands(CommandParser& parser)
+{
+  CommandDefinition defStrategyList("strategy", "list");
+  defStrategyList
+    .setTitle("print strategy choices");
+  parser.addCommand(defStrategyList, &StrategyChoiceModule::list);
+
+  CommandDefinition defStrategyShow("strategy", "show");
+  defStrategyShow
+    .setTitle("show strategy choice of an entry")
+    .addArg("prefix", ArgValueType::NAME, Required::YES, Positional::YES);
+  parser.addCommand(defStrategyShow, &StrategyChoiceModule::show);
+
+  CommandDefinition defStrategySet("strategy", "set");
+  defStrategySet
+    .setTitle("set strategy choice for a name prefix")
+    .addArg("prefix", ArgValueType::NAME, Required::YES, Positional::YES)
+    .addArg("strategy", ArgValueType::NAME, Required::YES, Positional::YES);
+  parser.addCommand(defStrategySet, &StrategyChoiceModule::set);
+
+  CommandDefinition defStrategyUnset("strategy", "unset");
+  defStrategyUnset
+    .setTitle("clear strategy choice at a name prefix")
+    .addArg("prefix", ArgValueType::NAME, Required::YES, Positional::YES);
+  parser.addCommand(defStrategyUnset, &StrategyChoiceModule::unset);
+}
+
+void
+StrategyChoiceModule::list(ExecuteContext& ctx)
+{
+  ctx.controller.fetch<ndn::nfd::StrategyChoiceDataset>(
+    [&] (const std::vector<StrategyChoice>& dataset) {
+      for (const StrategyChoice& entry : dataset) {
+        formatItemText(ctx.out, entry);
+        ctx.out << '\n';
+      }
+    },
+    ctx.makeDatasetFailureHandler("strategy choice dataset"),
+    ctx.makeCommandOptions());
+
+  ctx.face.processEvents();
+}
+
+void
+StrategyChoiceModule::show(ExecuteContext& ctx)
+{
+  auto prefix = ctx.args.get<Name>("prefix");
+
+  ctx.controller.fetch<ndn::nfd::StrategyChoiceDataset>(
+    [&] (const std::vector<StrategyChoice>& dataset) {
+      StrategyChoice match; // longest prefix match
+      for (const StrategyChoice& entry : dataset) {
+        if (entry.getName().isPrefixOf(prefix) &&
+            entry.getName().size() >= match.getName().size()) {
+          match = entry;
+        }
+      }
+      formatItemText(ctx.out, match, true);
+    },
+    ctx.makeDatasetFailureHandler("strategy choice dataset"),
+    ctx.makeCommandOptions());
+
+  ctx.face.processEvents();
+}
+
+void
+StrategyChoiceModule::set(ExecuteContext& ctx)
+{
+  auto prefix = ctx.args.get<Name>("prefix");
+  auto strategy = ctx.args.get<Name>("strategy");
+
+  ctx.controller.start<ndn::nfd::StrategyChoiceSetCommand>(
+    ControlParameters().setName(prefix).setStrategy(strategy),
+    [&] (const ControlParameters& resp) {
+      ctx.out << "strategy-set ";
+      text::ItemAttributes ia;
+      ctx.out << ia("prefix") << resp.getName()
+              << ia("strategy") << resp.getStrategy() << '\n';
+    },
+    [&] (const ControlResponse& resp) {
+      if (resp.getCode() == 404) {
+        ctx.exitCode = 7;
+        ctx.err << "Unknown strategy: " << strategy << '\n';
+        ///\todo #3887 list available strategies
+        return;
+      }
+      ctx.makeCommandFailureHandler("setting strategy")(resp); // invoke general error handler
+    },
+    ctx.makeCommandOptions());
+
+  ctx.face.processEvents();
+}
+
+void
+StrategyChoiceModule::unset(ExecuteContext& ctx)
+{
+  auto prefix = ctx.args.get<Name>("prefix");
+
+  if (prefix.empty()) {
+    ctx.exitCode = 2;
+    ctx.err << "Unsetting default strategy is prohibited\n";
+    return;
+  }
+
+  ctx.controller.start<ndn::nfd::StrategyChoiceUnsetCommand>(
+    ControlParameters().setName(prefix),
+    [&] (const ControlParameters& resp) {
+      ctx.out << "strategy-unset ";
+      text::ItemAttributes ia;
+      ctx.out << ia("prefix") << resp.getName() << '\n';
+    },
+    ctx.makeCommandFailureHandler("unsetting strategy"),
+    ctx.makeCommandOptions());
+
+  ctx.face.processEvents();
+}
 
 void
 StrategyChoiceModule::fetchStatus(Controller& controller,
@@ -68,16 +186,19 @@ StrategyChoiceModule::formatStatusText(std::ostream& os) const
 {
   os << "Strategy choices:\n";
   for (const StrategyChoice& item : m_status) {
-    this->formatItemText(os, item);
+    os << "  ";
+    formatItemText(os, item);
+    os << '\n';
   }
 }
 
 void
-StrategyChoiceModule::formatItemText(std::ostream& os, const StrategyChoice& item) const
+StrategyChoiceModule::formatItemText(std::ostream& os, const StrategyChoice& item, bool wantMultiLine)
 {
-  os << "  " << item.getName()
-     << " strategy=" << item.getStrategy()
-     << "\n";
+  text::ItemAttributes ia(wantMultiLine, 8);
+  os << ia("prefix") << item.getName()
+     << ia("strategy") << item.getStrategy()
+     << ia.end();
 }
 
 } // namespace nfdc

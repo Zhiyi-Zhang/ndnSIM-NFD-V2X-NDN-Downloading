@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,9 +24,10 @@
  */
 
 #include "nfdc/forwarder-general-module.hpp"
-#include <ndn-cxx/security/signing-helpers.hpp>
 
-#include "module-fixture.hpp"
+#include "status-fixture.hpp"
+
+#include <ndn-cxx/security/signing-helpers.hpp>
 
 namespace nfd {
 namespace tools {
@@ -34,41 +35,10 @@ namespace nfdc {
 namespace tests {
 
 BOOST_AUTO_TEST_SUITE(Nfdc)
-BOOST_FIXTURE_TEST_SUITE(TestForwarderGeneralModule, ModuleFixture<ForwarderGeneralModule>)
-
-class MakeNfdIdCollector
-{
-public:
-  unique_ptr<NfdIdCollector>
-  operator()(Face&, KeyChain&) const
-  {
-    return make_unique<NfdIdCollector>(make_unique<ValidatorNull>());
-  };
-};
-
-class ForwarderGeneralStatusFixture : public ModuleFixture<ForwarderGeneralModule,
-                                                           MakeNfdIdCollector>
-{
-protected:
-  ForwarderGeneralStatusFixture()
-  {
-    module.setNfdIdCollector(*validator);
-
-    this->systemClock->setNow(time::seconds(1468784936));
-    BOOST_REQUIRE(this->addIdentity("/nfd-status/test-nfdid"));
-  }
-
-private:
-  virtual void
-  signDatasetReply(Data& data) override
-  {
-    m_keyChain.sign(data, ndn::security::signingByIdentity("/nfd-status/test-nfdid"));
-  }
-};
+BOOST_FIXTURE_TEST_SUITE(TestForwarderGeneralModule, StatusFixture<ForwarderGeneralModule>)
 
 const std::string STATUS_XML = stripXmlSpaces(R"XML(
   <generalStatus>
-    <nfdId>/nfd-status/test-nfdid/KEY/ksk-1468784936000/ID-CERT</nfdId>
     <version>0.4.1-1-g704430c</version>
     <startTime>2016-06-24T15:13:46.856000</startTime>
     <currentTime>2016-07-17T17:55:54.109000</currentTime>
@@ -81,12 +51,12 @@ const std::string STATUS_XML = stripXmlSpaces(R"XML(
     <packetCounters>
       <incomingPackets>
         <nInterests>20699052</nInterests>
-        <nDatas>5598070</nDatas>
+        <nData>5598070</nData>
         <nNacks>7230</nNacks>
       </incomingPackets>
       <outgoingPackets>
         <nInterests>36501092</nInterests>
-        <nDatas>5671942</nDatas>
+        <nData>5671942</nData>
         <nNacks>26762</nNacks>
       </outgoingPackets>
     </packetCounters>
@@ -95,7 +65,6 @@ const std::string STATUS_XML = stripXmlSpaces(R"XML(
 
 const std::string STATUS_TEXT = std::string(R"TEXT(
 General NFD status:
-                 nfdId=/nfd-status/test-nfdid/KEY/ksk-1468784936000/ID-CERT
                version=0.4.1-1-g704430c
              startTime=20160624T151346.856000
            currentTime=20160717T175554.109000
@@ -107,13 +76,13 @@ General NFD status:
             nCsEntries=65536
           nInInterests=20699052
          nOutInterests=36501092
-              nInDatas=5598070
-             nOutDatas=5671942
+               nInData=5598070
+              nOutData=5671942
               nInNacks=7230
              nOutNacks=26762
 )TEXT").substr(1);
 
-BOOST_FIXTURE_TEST_CASE(Status, ForwarderGeneralStatusFixture)
+BOOST_AUTO_TEST_CASE(Status)
 {
   this->fetchStatus();
   ForwarderStatus payload;
@@ -126,10 +95,10 @@ BOOST_FIXTURE_TEST_CASE(Status, ForwarderGeneralStatusFixture)
          .setNMeasurementsEntries(1)
          .setNCsEntries(65536)
          .setNInInterests(20699052)
-         .setNInDatas(5598070)
+         .setNInData(5598070)
          .setNInNacks(7230)
          .setNOutInterests(36501092)
-         .setNOutDatas(5671942)
+         .setNOutData(5671942)
          .setNOutNacks(26762);
   this->sendDataset("/localhost/nfd/status/general", payload);
   this->prepareStatusOutput();

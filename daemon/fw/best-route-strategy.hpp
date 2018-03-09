@@ -31,6 +31,17 @@
 namespace nfd {
 namespace fw {
 
+class BestRouteStrategyBase : public Strategy
+{
+public:
+  void
+  afterReceiveInterest(const Face& inFace, const Interest& interest,
+                       const shared_ptr<pit::Entry>& pitEntry) override;
+
+protected:
+  BestRouteStrategyBase(Forwarder& forwarder);
+};
+
 /** \brief Best Route strategy version 1
  *
  *  This strategy forwards a new Interest to the lowest-cost nexthop
@@ -38,22 +49,18 @@ namespace fw {
  *  Subsequent similar Interests or consumer retransmissions are suppressed
  *  until after InterestLifetime expiry.
  *
- *  \deprecated This strategy is superceded by Best Route strategy version 2,
- *              which allows consumer retransmissions. This version is kept for
- *              comparison purposes and is not recommended for general usage.
+ *  \note This strategy is superceded by Best Route strategy version 2,
+ *        which allows consumer retransmissions. This version is kept for
+ *        comparison purposes and is not recommended for general usage.
  */
-class BestRouteStrategy : public Strategy
+class BestRouteStrategy : public BestRouteStrategyBase
 {
 public:
   explicit
-  BestRouteStrategy(Forwarder& forwarder, const Name& name = STRATEGY_NAME);
+  BestRouteStrategy(Forwarder& forwarder, const Name& name = getStrategyName());
 
-  virtual void
-  afterReceiveInterest(const Face& inFace, const Interest& interest,
-                       const shared_ptr<pit::Entry>& pitEntry) override;
-
-public:
-  static const Name STRATEGY_NAME;
+  static const Name&
+  getStrategyName();
 };
 
 } // namespace fw

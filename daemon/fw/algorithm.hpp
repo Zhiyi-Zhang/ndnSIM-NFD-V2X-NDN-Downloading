@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -73,14 +73,6 @@ namespace fw {
 bool
 wouldViolateScope(const Face& inFace, const Interest& interest, const Face& outFace);
 
-/** \brief determine whether forwarding the Interest in \p pitEntry to \p outFace would violate scope
- *  \sa https://redmine.named-data.net/projects/nfd/wiki/ScopeControl
- *  \deprecated use violatesScope(inFace, interest, outFace) instead
- */
-DEPRECATED(
-bool
-violatesScope(const pit::Entry& pitEntry, const Face& outFace));
-
 /** \brief decide whether Interest can be forwarded to face
  *
  *  \return true if out-record of this face does not exist or has expired,
@@ -115,6 +107,12 @@ findDuplicateNonce(const pit::Entry& pitEntry, uint32_t nonce, const Face& face)
  */
 bool
 hasPendingOutRecords(const pit::Entry& pitEntry);
+
+/** \return last out-record time
+ *  \pre pitEntry has one or more unexpired out-records
+ */
+time::steady_clock::TimePoint
+getLastOutgoing(const pit::Entry& pitEntry);
 
 } // namespace fw
 } // namespace nfd

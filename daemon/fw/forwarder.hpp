@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -38,6 +38,8 @@
 #include "table/strategy-choice.hpp"
 #include "table/dead-nonce-list.hpp"
 #include "table/network-region-table.hpp"
+
+#include "ns3/ndnSIM/model/cs/ndn-content-store.hpp"
 
 namespace nfd {
 
@@ -106,24 +108,33 @@ public: // faces and policies
 public: // forwarding entrypoints and tables
   /** \brief start incoming Interest processing
    *  \param face face on which Interest is received
-   *  \param interest the incoming Interest, must be created with make_shared
+   *  \param interest the incoming Interest, must be well-formed and created with make_shared
    */
   void
-  startProcessInterest(Face& face, const Interest& interest);
+  startProcessInterest(Face& face, const Interest& interest)
+  {
+    this->onIncomingInterest(face, interest);
+  }
 
   /** \brief start incoming Data processing
    *  \param face face on which Data is received
-   *  \param data the incoming Data, must be created with make_shared
+   *  \param data the incoming Data, must be well-formed and created with make_shared
    */
   void
-  startProcessData(Face& face, const Data& data);
+  startProcessData(Face& face, const Data& data)
+  {
+    this->onIncomingData(face, data);
+  }
 
   /** \brief start incoming Nack processing
    *  \param face face on which Nack is received
-   *  \param nack the incoming Nack, must be created with make_shared
+   *  \param nack the incoming Nack, must be well-formed
    */
   void
-  startProcessNack(Face& face, const lp::Nack& nack);
+  startProcessNack(Face& face, const lp::Nack& nack)
+  {
+    this->onIncomingNack(face, nack);
+  }
 
   NameTree&
   getNameTree()
@@ -173,6 +184,24 @@ public: // forwarding entrypoints and tables
     return m_networkRegionTable;
   }
 
+public: // allow enabling ndnSIM content store (will be removed in the future)
+  void
+  setCsFromNdnSim(ns3::Ptr<ns3::ndn::ContentStore> cs)
+  {
+    m_csFromNdnSim = cs;
+  }
+
+public:
+  /** \brief trigger before PIT entry is satisfied
+   *  \sa Strategy::beforeSatisfyInterest
+   */
+  signal::Signal<Forwarder, pit::Entry, Face, Data> beforeSatisfyInterest;
+
+  /** \brief trigger before PIT entry expires
+   *  \sa Strategy::beforeExpirePendingInterest
+   */
+  signal::Signal<Forwarder, pit::Entry> beforeExpirePendingInterest;
+
 PUBLIC_WITH_TESTS_ELSE_PRIVATE: // pipelines
   /** \brief incoming Interest pipeline
    */
@@ -216,7 +245,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE: // pipelines
    */
   VIRTUAL_WITH_TESTS void
   onInterestFinalize(const shared_ptr<pit::Entry>& pitEntry, bool isSatisfied,
-                     time::milliseconds dataFreshnessPeriod = time::milliseconds(-1));
+                     ndn::optional<time::milliseconds> dataFreshnessPeriod = ndn::nullopt);
 
   /** \brief incoming Data pipeline
    */
@@ -243,13 +272,16 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE: // pipelines
   VIRTUAL_WITH_TESTS void
   onOutgoingNack(const shared_ptr<pit::Entry>& pitEntry, const Face& outFace, const lp::NackHeader& nack);
 
+  VIRTUAL_WITH_TESTS void
+  onDroppedInterest(Face& outFace, const Interest& interest);
+
 PROTECTED_WITH_TESTS_ELSE_PRIVATE:
   VIRTUAL_WITH_TESTS void
   setUnsatisfyTimer(const shared_ptr<pit::Entry>& pitEntry);
 
   VIRTUAL_WITH_TESTS void
   setStragglerTimer(const shared_ptr<pit::Entry>& pitEntry, bool isSatisfied,
-                    time::milliseconds dataFreshnessPeriod = time::milliseconds(-1));
+                    ndn::optional<time::milliseconds> dataFreshnessPeriod = ndn::nullopt);
 
   VIRTUAL_WITH_TESTS void
   cancelUnsatisfyAndStragglerTimer(pit::Entry& pitEntry);
@@ -260,7 +292,7 @@ PROTECTED_WITH_TESTS_ELSE_PRIVATE:
    */
   VIRTUAL_WITH_TESTS void
   insertDeadNonceList(pit::Entry& pitEntry, bool isSatisfied,
-                      time::milliseconds dataFreshnessPeriod, Face* upstream);
+                      ndn::optional<time::milliseconds> dataFreshnessPeriod, Face* upstream);
 
   /** \brief call trigger (method) on the effective strategy of pitEntry
    */
@@ -290,6 +322,9 @@ private:
   StrategyChoice     m_strategyChoice;
   DeadNonceList      m_deadNonceList;
   NetworkRegionTable m_networkRegionTable;
+  shared_ptr<Face>   m_csFace;
+
+  ns3::Ptr<ns3::ndn::ContentStore> m_csFromNdnSim;
 
   // allow Strategy (base class) to enter pipelines
   friend class fw::Strategy;

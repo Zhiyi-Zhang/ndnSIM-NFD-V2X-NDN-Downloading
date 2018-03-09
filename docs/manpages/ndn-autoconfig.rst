@@ -18,9 +18,6 @@ Client tool to run :ref:`NDN hub discovery procedure`.
 Options
 -------
 
-``-h`` or ``--help``
-  Print usage information.
-
 ``-d`` or ``--daemon``
   Run ndn-autoconfig in daemon mode, detecting network change events and re-running
   auto-discovery procedure.  In addition, the auto-discovery procedure is unconditionally
@@ -32,8 +29,15 @@ Options
   Use the specified configuration file. If `enabled = true` is not specified in the
   configuration file, no actions will be performed.
 
+``--ndn-fch-url=[URL]``
+  Use the specified URL to find the closest hub (NDN-FCH protocol).  If not specified,
+  ``http://ndn-fch.named-data.net`` will be used.  Only ``http://`` URLs are supported.
+
+``-h`` or ``--help``
+  Print help message and exit.
+
 ``-V`` or ``--version``
-  Print version information.
+  Show version information and exit.
 
 .. _NDN hub discovery procedure:
 
@@ -42,12 +46,12 @@ NDN hub discovery procedure
 
 When an end host starts up, or detects a change in its network environment, it MAY use
 this procedure to discover a local or home NDN router, in order to gain connectivity to
-`the NDN research testbed <http://named-data.net/ndn-testbed/>`_.
+`the NDN research testbed <https://named-data.net/ndn-testbed/>`_.
 
 Overview
 ^^^^^^^^
 
-This procedure contains three methods to discover a NDN router:
+This procedure contains four methods to discover a NDN router:
 
 1.  Look for a local NDN router by multicast.
     This is useful in a home or small office network.
@@ -55,7 +59,9 @@ This procedure contains three methods to discover a NDN router:
 2.  Look for a local NDN router by DNS query with default suffix.
     This allows network administrator to configure a NDN router in a large enterprise network.
 
-3.  Connect to the home NDN router according to user certificate.
+3.  Find closest hub by sending an HTTP request to NDN-FCH server.
+
+4.  Connect to the home NDN router according to user certificate.
     This ensures connectivity from anywhere.
 
 After connecting to an NDN router, two prefixes will be automatically registered:
@@ -96,12 +102,30 @@ Response
 The DNS server should answer with an SRV record that contains the hostname and UDP port
 number of the NDN router.
 
-Stage 3: find home router
+Stage 3: HTTP Request to NDN-FCH server
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This stage uses a simple HTTP-based API.  For more information about NDN-FCH server, refer
+to the `NDN-FCH README file <https://github.com/named-data/ndn-fch>`__.
+
+Request
++++++++
+
+HTTP/1.0 request for the NDN-FCH server URI (``http://ndn-fch.named-data.net`` by default)
+
+Response
+++++++++
+
+The HTTP response is expected to be a hostname or an IP address of the closest hub,
+inferred using IP-geo approximation service.
+
+
+Stage 4: find home router
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This stage assumes that user has configured default certificate using
-`<http://ndncert.named-data.net/>`_ as described in `Certification Architecture
-<http://redmine.named-data.net/attachments/download/23/CertificationArchitecture.pptx>`_.
+`<https://ndncert.named-data.net/>`_ as described in `Certification Architecture
+<https://redmine.named-data.net/attachments/download/23/CertificationArchitecture.pptx>`_.
 
 Request
 +++++++
@@ -140,6 +164,14 @@ If this query is answered, connect to the HUB and terminate auto-discovery.
 Stage 3
 ^^^^^^^
 
+Send HTTP request to NDN-FCH server.
+
+If request succeeds, attempt to connect to the discovered HUB and terminate
+auto-discovery.
+
+Stage 4
+^^^^^^^
+
 * Load default user identity, and convert it to DNS format; if either fails, the
   auto-discovery fails.
 
@@ -147,6 +179,16 @@ Stage 3
   If this query is answered, connect to the home HUB and terminate auto-discovery.
   Otherwise, the auto-discovery fails.
 
+Exit status
+-----------
+
+0: No error.
+
+1: An unspecified error occurred.
+
+2: Malformed command line, e.g., invalid, missing, or unknown argument.
+
+4: Insufficient privileges.
 
 See also
 --------

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,6 +24,9 @@
  */
 
 #include "format-helpers.hpp"
+
+#include <iomanip>
+#include <sstream>
 
 namespace nfd {
 namespace tools {
@@ -73,9 +76,28 @@ operator<<(std::ostream& os, const Text& text)
 }
 
 std::string
-formatSeconds(time::seconds d)
+formatDuration(time::nanoseconds d)
 {
-  return "PT" + to_string(d.count()) + "S";
+  std::ostringstream str;
+
+  if (d < 0_ns) {
+    str << "-";
+  }
+
+  str << "PT";
+
+  time::seconds seconds(time::duration_cast<time::seconds>(time::abs(d)));
+  time::milliseconds ms(time::duration_cast<time::milliseconds>(time::abs(d) - seconds));
+
+  str << seconds.count();
+
+  if (ms >= 1_ms) {
+    str << "." << std::setfill('0') << std::setw(3) << ms.count();
+  }
+
+  str << "S";
+
+  return str.str();
 }
 
 std::string
@@ -118,10 +140,41 @@ operator<<(std::ostream& os, Separator& sep)
   return os << sep.m_subsequent;
 }
 
-std::string
-formatSeconds(time::seconds d, bool isLong)
+ItemAttributes::ItemAttributes(bool wantMultiLine, int maxAttributeWidth)
+  : m_wantMultiLine(wantMultiLine)
+  , m_maxAttributeWidth(maxAttributeWidth)
+  , m_count(0)
 {
-  return to_string(d.count()) + (isLong ? " seconds" : "s");
+}
+
+ItemAttributes::Attribute
+ItemAttributes::operator()(const std::string& attribute)
+{
+  return {*this, attribute};
+}
+
+std::string
+ItemAttributes::end() const
+{
+  return m_wantMultiLine ? "\n" : "";
+}
+
+std::ostream&
+operator<<(std::ostream& os, const ItemAttributes::Attribute& attr)
+{
+  ++attr.ia.m_count;
+  if (attr.ia.m_wantMultiLine) {
+    if (attr.ia.m_count > 1) {
+      os << '\n';
+    }
+    os << Spaces{attr.ia.m_maxAttributeWidth - static_cast<int>(attr.attribute.size())};
+  }
+  else {
+    if (attr.ia.m_count > 1) {
+      os << ' ';
+    }
+  }
+  return os << attr.attribute << '=';
 }
 
 std::string

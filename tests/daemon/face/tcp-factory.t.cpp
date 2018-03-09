@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,103 +25,325 @@
 
 #include "face/tcp-factory.hpp"
 
-#include "core/network-interface.hpp"
+#include "face-system-fixture.hpp"
 #include "factory-test-common.hpp"
 #include "tests/limited-io.hpp"
 
+#include <ndn-cxx/net/address-converter.hpp>
+
 namespace nfd {
+namespace face {
 namespace tests {
 
-BOOST_AUTO_TEST_SUITE(Face)
-BOOST_FIXTURE_TEST_SUITE(TestTcpFactory, BaseFixture)
-
-using nfd::Face;
-
-BOOST_AUTO_TEST_CASE(ChannelMap)
+class TcpFactoryFixture : public FaceSystemFactoryFixture<TcpFactory>
 {
-  TcpFactory factory;
+protected:
+  shared_ptr<TcpChannel>
+  createChannel(const std::string& localIp, const std::string& localPort)
+  {
+    tcp::Endpoint endpoint(ndn::ip::addressFromString(localIp),
+                           boost::lexical_cast<uint16_t>(localPort));
+    return factory.createChannel(endpoint);
+  }
+};
 
-  shared_ptr<TcpChannel> channel1 = factory.createChannel("127.0.0.1", "20070");
-  shared_ptr<TcpChannel> channel1a = factory.createChannel("127.0.0.1", "20070");
+BOOST_AUTO_TEST_SUITE(Face)
+BOOST_FIXTURE_TEST_SUITE(TestTcpFactory, TcpFactoryFixture)
+
+BOOST_AUTO_TEST_SUITE(ProcessConfig)
+
+BOOST_AUTO_TEST_CASE(Defaults)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+    }
+  )CONFIG";
+
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
+
+  checkChannelListEqual(factory, {"tcp4://0.0.0.0:6363", "tcp6://[::]:6363"});
+  auto channels = factory.getChannels();
+  BOOST_CHECK(std::all_of(channels.begin(), channels.end(),
+                          [] (const shared_ptr<const Channel>& ch) { return ch->isListening(); }));
+}
+
+BOOST_AUTO_TEST_CASE(DisableListen)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        listen no
+        port 7001
+      }
+    }
+  )CONFIG";
+
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
+
+  checkChannelListEqual(factory, {"tcp4://0.0.0.0:7001", "tcp6://[::]:7001"});
+  auto channels = factory.getChannels();
+  BOOST_CHECK(std::none_of(channels.begin(), channels.end(),
+                           [] (const shared_ptr<const Channel>& ch) { return ch->isListening(); }));
+}
+
+BOOST_AUTO_TEST_CASE(DisableV4)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        port 7001
+        enable_v4 no
+        enable_v6 yes
+      }
+    }
+  )CONFIG";
+
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
+
+  checkChannelListEqual(factory, {"tcp6://[::]:7001"});
+}
+
+BOOST_AUTO_TEST_CASE(DisableV6)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        port 7001
+        enable_v4 yes
+        enable_v6 no
+      }
+    }
+  )CONFIG";
+
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
+
+  checkChannelListEqual(factory, {"tcp4://0.0.0.0:7001"});
+}
+
+BOOST_AUTO_TEST_CASE(Omitted)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+    }
+  )CONFIG";
+
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
+
+  BOOST_CHECK_EQUAL(factory.getChannels().size(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(AllDisabled)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        enable_v4 no
+        enable_v6 no
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG, false), ConfigFile::Error);
+}
+
+BOOST_AUTO_TEST_CASE(BadListen)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        listen hello
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG, false), ConfigFile::Error);
+}
+
+BOOST_AUTO_TEST_CASE_EXPECTED_FAILURES(BadPort, 2) // Bug #4489
+BOOST_AUTO_TEST_CASE(BadPort)
+{
+  // not a number
+  const std::string CONFIG1 = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        port hello
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG1, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG1, false), ConfigFile::Error);
+
+  // negative number
+  const std::string CONFIG2 = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        port -1
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG2, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG2, false), ConfigFile::Error);
+
+  // out of range
+  const std::string CONFIG3 = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        port 65536
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG3, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG3, false), ConfigFile::Error);
+}
+
+BOOST_AUTO_TEST_CASE(UnknownOption)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      tcp
+      {
+        hello
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG, false), ConfigFile::Error);
+}
+
+BOOST_AUTO_TEST_SUITE_END() // ProcessConfig
+
+BOOST_AUTO_TEST_CASE(GetChannels)
+{
+  BOOST_CHECK_EQUAL(factory.getChannels().empty(), true);
+
+  std::set<std::string> expected;
+  expected.insert(createChannel("127.0.0.1", "20070")->getUri().toString());
+  expected.insert(createChannel("127.0.0.1", "20071")->getUri().toString());
+  expected.insert(createChannel("::1", "20071")->getUri().toString());
+  checkChannelListEqual(factory, expected);
+}
+
+BOOST_AUTO_TEST_CASE(CreateChannel)
+{
+  auto channel1 = createChannel("127.0.0.1", "20070");
+  auto channel1a = createChannel("127.0.0.1", "20070");
   BOOST_CHECK_EQUAL(channel1, channel1a);
   BOOST_CHECK_EQUAL(channel1->getUri().toString(), "tcp4://127.0.0.1:20070");
 
-  shared_ptr<TcpChannel> channel2 = factory.createChannel("127.0.0.1", "20071");
+  auto channel2 = createChannel("127.0.0.1", "20071");
   BOOST_CHECK_NE(channel1, channel2);
 
-  shared_ptr<TcpChannel> channel3 = factory.createChannel("::1", "20071");
+  auto channel3 = createChannel("::1", "20071");
   BOOST_CHECK_NE(channel2, channel3);
   BOOST_CHECK_EQUAL(channel3->getUri().toString(), "tcp6://[::1]:20071");
 }
 
-BOOST_AUTO_TEST_CASE(GetChannels)
+BOOST_AUTO_TEST_CASE(CreateFace)
 {
-  TcpFactory factory;
-  BOOST_REQUIRE_EQUAL(factory.getChannels().empty(), true);
+  createFace(factory,
+             FaceUri("tcp4://127.0.0.1:6363"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, false, false, false},
+             {CreateFaceExpectedResult::FAILURE, 504, "No channels available to connect"});
 
-  std::vector<shared_ptr<const Channel>> expectedChannels;
-  expectedChannels.push_back(factory.createChannel("127.0.0.1", "20070"));
-  expectedChannels.push_back(factory.createChannel("127.0.0.1", "20071"));
-  expectedChannels.push_back(factory.createChannel("::1", "20071"));
-
-  for (const auto& ch : factory.getChannels()) {
-    auto pos = std::find(expectedChannels.begin(), expectedChannels.end(), ch);
-    BOOST_REQUIRE(pos != expectedChannels.end());
-    expectedChannels.erase(pos);
-  }
-  BOOST_CHECK_EQUAL(expectedChannels.size(), 0);
-}
-
-BOOST_AUTO_TEST_CASE(FaceCreate)
-{
-  TcpFactory factory;
+  createChannel("127.0.0.1", "20071");
 
   createFace(factory,
              FaceUri("tcp4://127.0.0.1:6363"),
-             ndn::nfd::FACE_PERSISTENCY_PERSISTENT,
-             false,
-             {CreateFaceExpectedResult::FAILURE, 504, "No channels available to connect"});
-
-  factory.createChannel("127.0.0.1", "20071");
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, false, false, false},
+             {CreateFaceExpectedResult::SUCCESS, 0, ""});
 
   createFace(factory,
-             FaceUri("tcp4://127.0.0.1:20070"),
-             ndn::nfd::FACE_PERSISTENCY_PERSISTENT,
-             false,
+             FaceUri("tcp4://127.0.0.1:6363"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERMANENT, {}, {}, false, false, false},
+             {CreateFaceExpectedResult::SUCCESS, 0, ""});
+
+  createFace(factory,
+             FaceUri("tcp4://127.0.0.1:20072"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERMANENT, {}, {}, false, false, false},
+             {CreateFaceExpectedResult::SUCCESS, 0, ""});
+
+  createFace(factory,
+             FaceUri("tcp4://127.0.0.1:20073"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, false, true, false},
+             {CreateFaceExpectedResult::SUCCESS, 0, ""});
+
+  createFace(factory,
+             FaceUri("tcp4://127.0.0.1:20073"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, false, false, true},
              {CreateFaceExpectedResult::SUCCESS, 0, ""});
 }
 
-BOOST_AUTO_TEST_CASE(UnsupportedFaceCreate)
+BOOST_AUTO_TEST_CASE(UnsupportedCreateFace)
 {
-  TcpFactory factory;
-
-  factory.createChannel("127.0.0.1", "20070");
-  factory.createChannel("127.0.0.1", "20071");
+  createChannel("127.0.0.1", "20071");
 
   createFace(factory,
-             FaceUri("tcp4://127.0.0.1:20070"),
-             ndn::nfd::FACE_PERSISTENCY_PERMANENT,
-             false,
-             {CreateFaceExpectedResult::FAILURE, 406,
-               "Outgoing TCP faces only support persistent persistency"});
-
-  createFace(factory,
+             FaceUri("tcp4://127.0.0.1:20072"),
              FaceUri("tcp4://127.0.0.1:20071"),
-             ndn::nfd::FACE_PERSISTENCY_ON_DEMAND,
-             false,
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, false, false, false},
              {CreateFaceExpectedResult::FAILURE, 406,
-               "Outgoing TCP faces only support persistent persistency"});
+              "Unicast TCP faces cannot be created with a LocalUri"});
+
+  createFace(factory,
+             FaceUri("tcp4://127.0.0.1:20072"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_ON_DEMAND, {}, {}, false, false, false},
+             {CreateFaceExpectedResult::FAILURE, 406,
+              "Outgoing TCP faces do not support on-demand persistency"});
+
+  createFace(factory,
+             FaceUri("tcp4://198.51.100.100:6363"),
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, true, false, false},
+             {CreateFaceExpectedResult::FAILURE, 406,
+              "Local fields can only be enabled on faces with local scope"});
 }
 
-class FaceCreateTimeoutFixture : public BaseFixture
+class CreateFaceTimeoutFixture : public TcpFactoryFixture
 {
 public:
   void
-  onFaceCreated(const shared_ptr<Face>& newFace)
+  onFaceCreated(const shared_ptr<nfd::Face>& newFace)
   {
     BOOST_CHECK_MESSAGE(false, "Timeout expected");
-    BOOST_CHECK(!static_cast<bool>(face1));
-    face1 = newFace;
+    face = newFace;
 
     limitedIo.afterOp();
   }
@@ -136,111 +358,23 @@ public:
 
 public:
   LimitedIo limitedIo;
-
-  shared_ptr<Face> face1;
+  shared_ptr<nfd::Face> face;
 };
 
-BOOST_FIXTURE_TEST_CASE(FaceCreateTimeout, FaceCreateTimeoutFixture)
+BOOST_FIXTURE_TEST_CASE(CreateFaceTimeout, CreateFaceTimeoutFixture)
 {
-  TcpFactory factory;
-  shared_ptr<TcpChannel> channel = factory.createChannel("0.0.0.0", "20070");
+  createChannel("0.0.0.0", "20070");
+  factory.createFace({FaceUri("tcp4://192.0.2.1:20070"), {}, {}},
+                     bind(&CreateFaceTimeoutFixture::onFaceCreated, this, _1),
+                     bind(&CreateFaceTimeoutFixture::onConnectFailed, this, _2));
 
-  factory.createFace(FaceUri("tcp4://192.0.2.1:20070"),
-                     ndn::nfd::FACE_PERSISTENCY_PERSISTENT,
-                     false,
-                     bind(&FaceCreateTimeoutFixture::onFaceCreated, this, _1),
-                     bind(&FaceCreateTimeoutFixture::onConnectFailed, this, _2));
-
-  BOOST_CHECK_MESSAGE(limitedIo.run(1, time::seconds(10)) == LimitedIo::EXCEED_OPS,
-                      "TcpChannel error: cannot connect or cannot accept connection");
-
-  BOOST_CHECK_EQUAL(static_cast<bool>(face1), false);
-}
-
-class FakeNetworkInterfaceFixture : public BaseFixture
-{
-public:
-  FakeNetworkInterfaceFixture()
-  {
-    using namespace boost::asio::ip;
-
-    auto fakeInterfaces = make_shared<std::vector<NetworkInterfaceInfo>>();
-
-    fakeInterfaces->push_back(
-      NetworkInterfaceInfo {0, "eth0",
-        ethernet::Address::fromString("3e:15:c2:8b:65:00"),
-        {address_v4::from_string("0.0.0.0")},
-        {address_v6::from_string("::")},
-        address_v4(),
-        IFF_UP});
-    fakeInterfaces->push_back(
-      NetworkInterfaceInfo {1, "eth0",
-        ethernet::Address::fromString("3e:15:c2:8b:65:00"),
-        {address_v4::from_string("192.168.2.1"), address_v4::from_string("192.168.2.2")},
-        {},
-        address_v4::from_string("192.168.2.255"),
-        0});
-    fakeInterfaces->push_back(
-      NetworkInterfaceInfo {2, "eth1",
-        ethernet::Address::fromString("3e:15:c2:8b:65:00"),
-        {address_v4::from_string("198.51.100.1")},
-        {address_v6::from_string("2001:db8::2"), address_v6::from_string("2001:db8::3")},
-        address_v4::from_string("198.51.100.255"),
-        IFF_MULTICAST | IFF_BROADCAST | IFF_UP});
-
-    setDebugNetworkInterfaces(fakeInterfaces);
-  }
-
-  ~FakeNetworkInterfaceFixture()
-  {
-    setDebugNetworkInterfaces(nullptr);
-  }
-};
-
-BOOST_FIXTURE_TEST_CASE(Bug2292, FakeNetworkInterfaceFixture)
-{
-  using namespace boost::asio::ip;
-
-  TcpFactory factory;
-  factory.prohibitEndpoint(tcp::Endpoint(address_v4::from_string("192.168.2.1"), 1024));
-  BOOST_REQUIRE_EQUAL(factory.m_prohibitedEndpoints.size(), 1);
-  BOOST_CHECK((factory.m_prohibitedEndpoints ==
-               std::set<tcp::Endpoint> {
-                 tcp::Endpoint(address_v4::from_string("192.168.2.1"), 1024),
-               }));
-
-  factory.m_prohibitedEndpoints.clear();
-  factory.prohibitEndpoint(tcp::Endpoint(address_v6::from_string("2001:db8::1"), 2048));
-  BOOST_REQUIRE_EQUAL(factory.m_prohibitedEndpoints.size(), 1);
-  BOOST_CHECK((factory.m_prohibitedEndpoints ==
-               std::set<tcp::Endpoint> {
-                 tcp::Endpoint(address_v6::from_string("2001:db8::1"), 2048)
-               }));
-
-  factory.m_prohibitedEndpoints.clear();
-  factory.prohibitEndpoint(tcp::Endpoint(address_v4(), 1024));
-  BOOST_REQUIRE_EQUAL(factory.m_prohibitedEndpoints.size(), 4);
-  BOOST_CHECK((factory.m_prohibitedEndpoints ==
-               std::set<tcp::Endpoint> {
-                 tcp::Endpoint(address_v4::from_string("192.168.2.1"), 1024),
-                 tcp::Endpoint(address_v4::from_string("192.168.2.2"), 1024),
-                 tcp::Endpoint(address_v4::from_string("198.51.100.1"), 1024),
-                 tcp::Endpoint(address_v4::from_string("0.0.0.0"), 1024)
-               }));
-
-  factory.m_prohibitedEndpoints.clear();
-  factory.prohibitEndpoint(tcp::Endpoint(address_v6(), 2048));
-  BOOST_REQUIRE_EQUAL(factory.m_prohibitedEndpoints.size(), 3);
-  BOOST_CHECK((factory.m_prohibitedEndpoints ==
-               std::set<tcp::Endpoint> {
-                 tcp::Endpoint(address_v6::from_string("2001:db8::2"), 2048),
-                 tcp::Endpoint(address_v6::from_string("2001:db8::3"), 2048),
-                 tcp::Endpoint(address_v6::from_string("::"), 2048)
-               }));
+  BOOST_REQUIRE_EQUAL(limitedIo.run(1, 10_s), LimitedIo::EXCEED_OPS);
+  BOOST_CHECK(face == nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestTcpFactory
 BOOST_AUTO_TEST_SUITE_END() // Face
 
 } // namespace tests
+} // namespace face
 } // namespace nfd

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -28,6 +28,12 @@
 
 #include "command-arguments.hpp"
 #include <ndn-cxx/face.hpp>
+#include <ndn-cxx/mgmt/nfd/command-options.hpp>
+#include <ndn-cxx/mgmt/nfd/controller.hpp>
+#include <ndn-cxx/mgmt/nfd/control-command.hpp>
+#include <ndn-cxx/mgmt/nfd/control-parameters.hpp>
+#include <ndn-cxx/mgmt/nfd/control-response.hpp>
+#include <ndn-cxx/mgmt/nfd/status-dataset.hpp>
 #include <ndn-cxx/security/key-chain.hpp>
 
 namespace nfd {
@@ -36,24 +42,53 @@ namespace nfdc {
 
 using ndn::Face;
 using ndn::KeyChain;
+using ndn::nfd::ControlParameters;
+using ndn::nfd::ControlResponse;
+using ndn::nfd::Controller;
 
 /** \brief context for command execution
  */
-struct ExecuteContext
+class ExecuteContext
 {
+public:
+  /** \return timeout for each step
+   */
+  time::nanoseconds
+  getTimeout() const;
+
+  ndn::nfd::CommandOptions
+  makeCommandOptions() const;
+
+  /** \return handler for command execution failure
+   *  \param commandName command name used in error message (present continuous tense)
+   */
+  Controller::CommandFailCallback
+  makeCommandFailureHandler(const std::string& commandName);
+
+  /** \return handler for dataset retrieval failure
+   *  \param datasetName dataset name used in error message (noun phrase)
+   */
+  Controller::DatasetFailCallback
+  makeDatasetFailureHandler(const std::string& datasetName);
+
+public:
   const std::string& noun;
   const std::string& verb;
   const CommandArguments& args;
 
+  int exitCode; ///< program exit code
+  std::ostream& out; ///< output stream
+  std::ostream& err; ///< error stream
+
   Face& face;
   KeyChain& keyChain;
   ///\todo validator
+  Controller& controller;
 };
 
 /** \brief a function to execute a command
- *  \return exit code
  */
-typedef std::function<int(ExecuteContext& ctx)> ExecuteCommand;
+using ExecuteCommand = std::function<void(ExecuteContext& ctx)>;
 
 } // namespace nfdc
 } // namespace tools

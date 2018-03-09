@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -78,6 +78,12 @@ BOOST_AUTO_TEST_CASE(Insert)
   BOOST_CHECK_EQUAL(insertResult.second, true);
   BOOST_CHECK_EQUAL(pit.size(), 1);
 
+  // same as A
+  shared_ptr<Interest> interestA2 = make_shared<Interest>(*interestA);
+  insertResult = pit.insert(*interestA2);
+  BOOST_CHECK_EQUAL(insertResult.second, false); // sharing the same PIT entry
+  BOOST_CHECK_EQUAL(pit.size(), 1);
+
   // A+MinSuffixComponents
   shared_ptr<Interest> interestB = make_shared<Interest>(*interestA);
   interestB->setMinSuffixComponents(2);
@@ -120,47 +126,40 @@ BOOST_AUTO_TEST_CASE(Insert)
   BOOST_CHECK_EQUAL(insertResult.second, true);
   BOOST_CHECK_EQUAL(pit.size(), 7);
 
-  // A+ChildSelector0
-  shared_ptr<Interest> interestH = make_shared<Interest>(*interestA);
-  interestH->setChildSelector(0);
-  insertResult = pit.insert(*interestH);
-  BOOST_CHECK_EQUAL(insertResult.second, true);
-  BOOST_CHECK_EQUAL(pit.size(), 8);
-
   // A+ChildSelector1
   shared_ptr<Interest> interestI = make_shared<Interest>(*interestA);
   interestI->setChildSelector(1);
   insertResult = pit.insert(*interestI);
   BOOST_CHECK_EQUAL(insertResult.second, true);
-  BOOST_CHECK_EQUAL(pit.size(), 9);
+  BOOST_CHECK_EQUAL(pit.size(), 8);
 
   // A+MustBeFresh
   shared_ptr<Interest> interestJ = make_shared<Interest>(*interestA);
   interestJ->setMustBeFresh(true);
   insertResult = pit.insert(*interestJ);
   BOOST_CHECK_EQUAL(insertResult.second, true);
-  BOOST_CHECK_EQUAL(pit.size(), 10);
+  BOOST_CHECK_EQUAL(pit.size(), 9);
 
   // A+InterestLifetime
   shared_ptr<Interest> interestK = make_shared<Interest>(*interestA);
   interestK->setInterestLifetime(time::milliseconds(1000));
   insertResult = pit.insert(*interestK);
-  BOOST_CHECK_EQUAL(insertResult.second, false);// only guiders differ
-  BOOST_CHECK_EQUAL(pit.size(), 10);
+  BOOST_CHECK_EQUAL(insertResult.second, false); // only guiders differ
+  BOOST_CHECK_EQUAL(pit.size(), 9);
 
   // A+Nonce
   shared_ptr<Interest> interestL = make_shared<Interest>(*interestA);
   interestL->setNonce(2192);
   insertResult = pit.insert(*interestL);
-  BOOST_CHECK_EQUAL(insertResult.second, false);// only guiders differ
-  BOOST_CHECK_EQUAL(pit.size(), 10);
+  BOOST_CHECK_EQUAL(insertResult.second, false); // only guiders differ
+  BOOST_CHECK_EQUAL(pit.size(), 9);
 
   // different Name+Exclude1
   shared_ptr<Interest> interestM = make_shared<Interest>(name2);
   interestM->setExclude(exclude1);
   insertResult = pit.insert(*interestM);
   BOOST_CHECK_EQUAL(insertResult.second, true);
-  BOOST_CHECK_EQUAL(pit.size(), 11);
+  BOOST_CHECK_EQUAL(pit.size(), 10);
 }
 
 BOOST_AUTO_TEST_CASE(Erase)
@@ -307,6 +306,44 @@ BOOST_AUTO_TEST_CASE(MatchFullName) // Bug 3363
   BOOST_REQUIRE_EQUAL(std::distance(matches.begin(), matches.end()), 1);
   shared_ptr<Entry> found = *matches.begin();
   BOOST_CHECK_EQUAL(found->getName(), fullName);
+}
+
+BOOST_AUTO_TEST_CASE(InsertMatchLongName)
+{
+  NameTree nameTree(16);
+  Pit pit(nameTree);
+
+  Name n1;
+  while (n1.size() < NameTree::getMaxDepth()) {
+    n1.append("A");
+  }
+  Name n2 = n1;
+  while (n2.size() < NameTree::getMaxDepth() * 2) {
+    n2.append("B");
+  }
+  Name n3 = n1;
+  while (n3.size() < NameTree::getMaxDepth() * 2) {
+    n3.append("C");
+  }
+  auto d2 = makeData(n2);
+  auto i2 = makeInterest(n2);
+  auto d3 = makeData(n3);
+  auto i3 = makeInterest(d3->getFullName());
+
+  shared_ptr<Entry> entry2 = pit.insert(*i2).first;
+  shared_ptr<Entry> entry3 = pit.insert(*i3).first;
+
+  BOOST_CHECK_EQUAL(pit.size(), 2);
+  BOOST_CHECK_EQUAL(nameTree.size(), 1 + NameTree::getMaxDepth()); // root node + max depth
+  BOOST_CHECK(entry2->getInterest().matchesInterest(*i2));
+  BOOST_CHECK(entry3->getInterest().matchesInterest(*i3));
+
+  DataMatchResult matches2 = pit.findAllDataMatches(*d2);
+  BOOST_REQUIRE_EQUAL(std::distance(matches2.begin(), matches2.end()), 1);
+  BOOST_CHECK(*matches2.begin() == entry2);
+  DataMatchResult matches3 = pit.findAllDataMatches(*d3);
+  BOOST_REQUIRE_EQUAL(std::distance(matches3.begin(), matches3.end()), 1);
+  BOOST_CHECK(*matches3.begin() == entry3);
 }
 
 BOOST_AUTO_TEST_CASE(Iterator)

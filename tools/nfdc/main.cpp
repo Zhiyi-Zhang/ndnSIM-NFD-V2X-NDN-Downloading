@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,6 +27,8 @@
 #include "help.hpp"
 #include "core/version.hpp"
 
+#include <iostream>
+
 namespace nfd {
 namespace tools {
 namespace nfdc {
@@ -39,12 +41,12 @@ main(int argc, char** argv)
   CommandParser parser;
   registerCommands(parser);
 
-  if (args.empty() || args[0] == "-h") {
+  if (args.empty() || args[0] == "-h" || args[0] == "--help") {
     helpList(std::cout, parser);
     return 0;
   }
 
-  if (args[0] == "-V") {
+  if (args[0] == "-V" || args[0] == "--version") {
     std::cout << NFD_VERSION_BUILD_STRING << std::endl;
     return 0;
   }
@@ -53,7 +55,7 @@ main(int argc, char** argv)
   CommandArguments ca;
   ExecuteCommand execute;
   try {
-    std::tie(noun, verb, ca, execute) = parser.parse(args, ParseMode::ONE_SHOT);
+    std::tie(noun, verb, ca, execute) = parser.parse(std::move(args), ParseMode::ONE_SHOT);
   }
   catch (const std::invalid_argument& e) {
     std::cerr << e.what() << std::endl;
@@ -61,10 +63,12 @@ main(int argc, char** argv)
   }
 
   try {
-    ndn::Face face;
-    ndn::KeyChain keyChain;
-    ExecuteContext ctx{noun, verb, ca, face, keyChain};
-    return execute(ctx);
+    Face face;
+    KeyChain keyChain;
+    Controller controller(face, keyChain);
+    ExecuteContext ctx{noun, verb, ca, 0, std::cout, std::cerr, face, keyChain, controller};
+    execute(ctx);
+    return ctx.exitCode;
   }
   catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,74 +25,120 @@
 
 #include "face/unix-stream-factory.hpp"
 
+#include "face-system-fixture.hpp"
 #include "factory-test-common.hpp"
-#include "tests/limited-io.hpp"
 
 namespace nfd {
+namespace face {
 namespace tests {
 
-#define CHANNEL_PATH1 "unix-stream-test.1.sock"
-#define CHANNEL_PATH2 "unix-stream-test.2.sock"
+using UnixStreamFactoryFixture = FaceSystemFactoryFixture<UnixStreamFactory>;
 
 BOOST_AUTO_TEST_SUITE(Face)
-BOOST_FIXTURE_TEST_SUITE(TestUnixStreamFactory, BaseFixture)
+BOOST_FIXTURE_TEST_SUITE(TestUnixStreamFactory, UnixStreamFactoryFixture)
 
-using nfd::Face;
+static const std::string CHANNEL_PATH1("unix-stream-test.1.sock");
+static const std::string CHANNEL_PATH2("unix-stream-test.2.sock");
 
-BOOST_AUTO_TEST_CASE(ChannelMap)
+BOOST_AUTO_TEST_SUITE(ProcessConfig)
+
+BOOST_AUTO_TEST_CASE(Normal)
 {
-  UnixStreamFactory factory;
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      unix
+      {
+        path /tmp/nfd-test.sock
+      }
+    }
+  )CONFIG";
 
-  shared_ptr<UnixStreamChannel> channel1 = factory.createChannel(CHANNEL_PATH1);
-  shared_ptr<UnixStreamChannel> channel1a = factory.createChannel(CHANNEL_PATH1);
-  BOOST_CHECK_EQUAL(channel1, channel1a);
-  std::string channel1uri = channel1->getUri().toString();
-  BOOST_CHECK_EQUAL(channel1uri.find("unix:///"), 0); // third '/' is the path separator
-  BOOST_CHECK_EQUAL(channel1uri.rfind(CHANNEL_PATH1),
-                    channel1uri.size() - std::string(CHANNEL_PATH1).size());
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
 
-  shared_ptr<UnixStreamChannel> channel2 = factory.createChannel(CHANNEL_PATH2);
-  BOOST_CHECK_NE(channel1, channel2);
+  BOOST_REQUIRE_EQUAL(factory.getChannels().size(), 1);
+  const auto& uri = factory.getChannels().front()->getUri();
+  BOOST_CHECK_EQUAL(uri.getScheme(), "unix");
+  BOOST_CHECK_NE(uri.getPath().find("nfd-test.sock"), std::string::npos);
 }
+
+BOOST_AUTO_TEST_CASE(Omitted)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+    }
+  )CONFIG";
+
+  parseConfig(CONFIG, true);
+  parseConfig(CONFIG, false);
+
+  BOOST_CHECK_EQUAL(factory.getChannels().size(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(UnknownOption)
+{
+  const std::string CONFIG = R"CONFIG(
+    face_system
+    {
+      unix
+      {
+        hello
+      }
+    }
+  )CONFIG";
+
+  BOOST_CHECK_THROW(parseConfig(CONFIG, true), ConfigFile::Error);
+  BOOST_CHECK_THROW(parseConfig(CONFIG, false), ConfigFile::Error);
+}
+
+BOOST_AUTO_TEST_SUITE_END() // ProcessConfig
 
 BOOST_AUTO_TEST_CASE(GetChannels)
 {
-  UnixStreamFactory factory;
-  BOOST_CHECK(factory.getChannels().empty());
+  BOOST_CHECK_EQUAL(factory.getChannels().empty(), true);
 
-  std::vector<shared_ptr<const Channel>> expectedChannels;
-  expectedChannels.push_back(factory.createChannel(CHANNEL_PATH1));
-  expectedChannels.push_back(factory.createChannel(CHANNEL_PATH2));
-
-  for (const auto& channel : factory.getChannels()) {
-    auto pos = std::find(expectedChannels.begin(), expectedChannels.end(), channel);
-    BOOST_REQUIRE(pos != expectedChannels.end());
-    expectedChannels.erase(pos);
-  }
-
-  BOOST_CHECK_EQUAL(expectedChannels.size(), 0);
+  std::set<std::string> expected;
+  expected.insert(factory.createChannel(CHANNEL_PATH1)->getUri().toString());
+  expected.insert(factory.createChannel(CHANNEL_PATH2)->getUri().toString());
+  checkChannelListEqual(factory, expected);
 }
 
-BOOST_AUTO_TEST_CASE(UnsupportedFaceCreate)
+BOOST_AUTO_TEST_CASE(CreateChannel)
 {
-  UnixStreamFactory factory;
+  auto channel1 = factory.createChannel(CHANNEL_PATH1);
+  auto channel1a = factory.createChannel(CHANNEL_PATH1);
+  BOOST_CHECK_EQUAL(channel1, channel1a);
 
+  const auto& uri = channel1->getUri();
+  BOOST_CHECK_EQUAL(uri.getScheme(), "unix");
+  BOOST_CHECK_EQUAL(uri.getHost(), "");
+  BOOST_CHECK_EQUAL(uri.getPort(), "");
+  BOOST_CHECK_EQUAL(uri.getPath().rfind(CHANNEL_PATH1), uri.getPath().size() - CHANNEL_PATH1.size());
+
+  auto channel2 = factory.createChannel(CHANNEL_PATH2);
+  BOOST_CHECK_NE(channel1, channel2);
+}
+
+BOOST_AUTO_TEST_CASE(UnsupportedCreateFace)
+{
   createFace(factory,
              FaceUri("unix:///var/run/nfd.sock"),
-             ndn::nfd::FACE_PERSISTENCY_PERMANENT,
-             false,
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_ON_DEMAND, {}, {}, false, false, false},
              {CreateFaceExpectedResult::FAILURE, 406, "Unsupported protocol"});
 
   createFace(factory,
              FaceUri("unix:///var/run/nfd.sock"),
-             ndn::nfd::FACE_PERSISTENCY_ON_DEMAND,
-             false,
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERSISTENT, {}, {}, false, false, false},
              {CreateFaceExpectedResult::FAILURE, 406, "Unsupported protocol"});
 
   createFace(factory,
              FaceUri("unix:///var/run/nfd.sock"),
-             ndn::nfd::FACE_PERSISTENCY_PERSISTENT,
-             false,
+             {},
+             {ndn::nfd::FACE_PERSISTENCY_PERMANENT, {}, {}, false, false, false},
              {CreateFaceExpectedResult::FAILURE, 406, "Unsupported protocol"});
 }
 
@@ -100,4 +146,5 @@ BOOST_AUTO_TEST_SUITE_END() // TestUnixStreamFactory
 BOOST_AUTO_TEST_SUITE_END() // Face
 
 } // namespace tests
+} // namespace face
 } // namespace nfd

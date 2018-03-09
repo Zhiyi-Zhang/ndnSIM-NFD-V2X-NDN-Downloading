@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -40,6 +40,22 @@ public:
   NameTree(size_t nBuckets = 1024);
 
 public: // information
+  /** \brief Maximum depth of the name tree.
+   *
+   *  Calling NameTree::lookup with a name with many components would cause the creation of many
+   *  NameTree entries, which could take very long time. This constant limits the maximum number of
+   *  name components in the name of a NameTree entry. Thus, it limits the number of NameTree
+   *  entries created from a long name, bounding the processing complexity.
+   *
+   *  This constant is currently advisory. It is enforced in NameTree::lookup only if
+   *  \p enforceMaxDepth is set to true. This will become mandatory later.
+   */
+  static constexpr size_t
+  getMaxDepth()
+  {
+    return 32;
+  }
+
   /** \return number of name tree entries
    */
   size_t
@@ -59,9 +75,9 @@ public: // information
   /** \return name tree entry on which a table entry is attached,
    *          or nullptr if the table entry is detached
    */
-  template<typename ENTRY>
+  template<typename EntryT>
   Entry*
-  getEntry(const ENTRY& tableEntry) const
+  getEntry(const EntryT& tableEntry) const
   {
     return Entry::get(tableEntry);
   }
@@ -69,12 +85,13 @@ public: // information
 public: // mutation
   /** \brief find or insert an entry with specified name
    *  \param name a name prefix
+   *  \param enforceMaxDepth if true, use \p name.getPrefix(getMaxDepth()) in place of \p name
    *  \return an entry with \p name
    *  \post an entry with \p name and all ancestors are created
    *  \note Existing iterators are unaffected.
    */
   Entry&
-  lookup(const Name& name);
+  lookup(const Name& name, bool enforceMaxDepth = false);
 
   /** \brief equivalent to .lookup(fibEntry.getPrefix())
    *  \param fibEntry a FIB entry attached to this name tree, or Fib::s_emptyEntry
@@ -119,10 +136,10 @@ public: // mutation
 
 public: // matching
   /** \brief exact match lookup
-   *  \return entry with \p name, or nullptr if it does not exist
+   *  \return entry with \p name.getPrefix(prefixLen), or nullptr if it does not exist
    */
   Entry*
-  findExactMatch(const Name& name) const;
+  findExactMatch(const Name& name, size_t prefixLen = std::numeric_limits<size_t>::max()) const;
 
   /** \brief longest prefix matching
    *  \return entry whose name is a prefix of \p name and passes \p entrySelector,
@@ -142,15 +159,20 @@ public: // matching
                          const EntrySelector& entrySelector = AnyEntry()) const;
 
   /** \brief equivalent to .findLongestPrefixMatch(getEntry(tableEntry)->getName(), entrySelector)
-   *  \tparam ENTRY fib::Entry or measurements::Entry or strategy_choice::Entry
+   *  \tparam EntryT fib::Entry or measurements::Entry or strategy_choice::Entry
    *  \note This overload is more efficient than
    *        .findLongestPrefixMatch(const Name&, const EntrySelector&) in common cases.
    *  \warning Undefined behavior may occur if tableEntry is not attached to this name tree.
    */
-  template<typename ENTRY>
+  template<typename EntryT>
   Entry*
-  findLongestPrefixMatch(const ENTRY& tableEntry,
-                         const EntrySelector& entrySelector = AnyEntry()) const;
+  findLongestPrefixMatch(const EntryT& tableEntry,
+                         const EntrySelector& entrySelector = AnyEntry()) const
+  {
+    const Entry* nte = this->getEntry(tableEntry);
+    BOOST_ASSERT(nte != nullptr);
+    return this->findLongestPrefixMatch(*nte, entrySelector);
+  }
 
   /** \brief equivalent to .findLongestPrefixMatch(pitEntry.getName(), entrySelector)
    *  \note This overload is more efficient than
@@ -185,7 +207,7 @@ public: // matching
                  const EntrySelector& entrySelector = AnyEntry()) const;
 
 public: // enumeration
-  typedef Iterator const_iterator;
+  using const_iterator = Iterator;
 
   /** \brief enumerate all entries
    *  \return a range where every entry matches \p entrySelector

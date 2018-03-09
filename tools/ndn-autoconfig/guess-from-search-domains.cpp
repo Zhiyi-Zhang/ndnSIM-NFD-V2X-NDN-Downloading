@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,27 +24,21 @@
  */
 
 #include "guess-from-search-domains.hpp"
+#include "dns-srv.hpp"
 
 namespace ndn {
 namespace tools {
 namespace autoconfig {
 
-GuessFromSearchDomains::GuessFromSearchDomains(Face& face, KeyChain& keyChain,
-                                               const NextStageCallback& nextStageOnFailure)
-  : BaseDns(face, keyChain, nextStageOnFailure)
-{
-}
-
 void
-GuessFromSearchDomains::start()
+GuessFromSearchDomains::doStart()
 {
   try {
-    std::string hubUri = BaseDns::querySrvRrSearch();
-    this->connectToHub(hubUri);
+    std::string hubUri = querySrvRrSearch();
+    this->provideHubFaceUri(hubUri);
   }
-  catch (const BaseDns::Error& e) {
-    m_nextStageOnFailure(std::string("Failed to find NDN router using default suffix DNS query (") +
-                         e.what() + ")");
+  catch (const DnsSrvError& e) {
+    this->fail(e.what());
   }
 }
 

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,6 +26,8 @@
 #include "tcp-transport-fixture.hpp"
 #include "unix-stream-transport-fixture.hpp"
 
+#include "transport-test-common.hpp"
+
 #include <boost/mpl/vector.hpp>
 
 namespace nfd {
@@ -35,13 +37,14 @@ namespace tests {
 BOOST_AUTO_TEST_SUITE(Face)
 BOOST_AUTO_TEST_SUITE(TestStreamTransport)
 
-typedef boost::mpl::vector<TcpTransportFixture,
-                           UnixStreamTransportFixture
-                           > StreamTransportFixtures;
+using StreamTransportFixtures = boost::mpl::vector<
+  GENERATE_IP_TRANSPORT_FIXTURE_INSTANTIATIONS(TcpTransportFixture),
+  UnixStreamTransportFixture
+>;
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(Send, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
   auto block1 = ndn::encoding::makeStringBlock(300, "hello");
   this->transport->send(Transport::Packet{Block{block1}}); // make a copy of the block
@@ -69,7 +72,7 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(Send, T, StreamTransportFixtures, T)
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveNormal, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
   Block pkt = ndn::encoding::makeStringBlock(300, "hello");
   ndn::Buffer buf(pkt.begin(), pkt.end());
@@ -83,7 +86,7 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveNormal, T, StreamTransportFixtures, T)
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveMultipleSegments, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
   Block pkt = ndn::encoding::makeStringBlock(300, "hello");
   ndn::Buffer buf1(pkt.begin(), pkt.end() - 2);
@@ -106,13 +109,13 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveMultipleSegments, T, StreamTransportFixt
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveMultipleBlocks, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
   Block pkt1 = ndn::encoding::makeStringBlock(300, "hello");
   Block pkt2 = ndn::encoding::makeStringBlock(301, "world");
   ndn::Buffer buf(pkt1.size() + pkt2.size());
-  std::copy(pkt1.begin(), pkt1.end(), buf.buf());
-  std::copy(pkt2.begin(), pkt2.end(), buf.buf() + pkt1.size());
+  std::copy(pkt1.begin(), pkt1.end(), buf.begin());
+  std::copy(pkt2.begin(), pkt2.end(), buf.begin() + pkt1.size());
 
   this->remoteWrite(buf);
 
@@ -124,7 +127,7 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveMultipleBlocks, T, StreamTransportFixtur
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTooLarge, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
   std::vector<uint8_t> bytes(ndn::MAX_NDN_PACKET_SIZE, 0);
   Block pkt1 = ndn::encoding::makeBinaryBlock(300, bytes.data(), bytes.size() - 6);
@@ -144,7 +147,7 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTooLarge, T, StreamTransportFixtures, T)
 
   int nStateChanges = 0;
   this->transport->afterStateChange.connect(
-    [this, &nStateChanges] (TransportState oldState, TransportState newState) {
+    [&nStateChanges] (TransportState oldState, TransportState newState) {
       switch (nStateChanges) {
       case 0:
         BOOST_CHECK_EQUAL(oldState, TransportState::UP);
@@ -171,9 +174,9 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(ReceiveTooLarge, T, StreamTransportFixtures, T)
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(Close, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
-  this->transport->afterStateChange.connectSingleShot([this] (TransportState oldState, TransportState newState) {
+  this->transport->afterStateChange.connectSingleShot([] (TransportState oldState, TransportState newState) {
     BOOST_CHECK_EQUAL(oldState, TransportState::UP);
     BOOST_CHECK_EQUAL(newState, TransportState::CLOSING);
   });
@@ -191,11 +194,11 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(Close, T, StreamTransportFixtures, T)
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(RemoteClose, T, StreamTransportFixtures, T)
 {
-  this->initialize();
+  TRANSPORT_TEST_INIT();
 
   this->transport->afterStateChange.connectSingleShot([this] (TransportState oldState, TransportState newState) {
     BOOST_CHECK_EQUAL(oldState, TransportState::UP);
-    BOOST_CHECK_EQUAL(newState, TransportState::FAILED);
+    BOOST_CHECK_EQUAL(newState, TransportState::CLOSING);
     this->limitedIo.afterOp();
   });
 
@@ -203,12 +206,19 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(RemoteClose, T, StreamTransportFixtures, T)
   BOOST_REQUIRE_EQUAL(this->limitedIo.run(1, time::seconds(1)), LimitedIo::EXCEED_OPS);
 
   this->transport->afterStateChange.connectSingleShot([this] (TransportState oldState, TransportState newState) {
-    BOOST_CHECK_EQUAL(oldState, TransportState::FAILED);
+    BOOST_CHECK_EQUAL(oldState, TransportState::CLOSING);
     BOOST_CHECK_EQUAL(newState, TransportState::CLOSED);
     this->limitedIo.afterOp();
   });
 
   BOOST_REQUIRE_EQUAL(this->limitedIo.run(1, time::seconds(1)), LimitedIo::EXCEED_OPS);
+}
+
+BOOST_FIXTURE_TEST_CASE_TEMPLATE(SendQueueLength, T, StreamTransportFixtures, T)
+{
+  TRANSPORT_TEST_INIT();
+
+  BOOST_CHECK_EQUAL(this->transport->getSendQueueLength(), 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestStreamTransport

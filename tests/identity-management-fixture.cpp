@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -24,6 +24,10 @@
  */
 
 #include "identity-management-fixture.hpp"
+#include <ndn-cxx/security/pib/identity.hpp>
+#include <ndn-cxx/security/pib/key.hpp>
+#include <ndn-cxx/security/pib/pib.hpp>
+#include <ndn-cxx/security/v2/certificate.hpp>
 #include <ndn-cxx/util/io.hpp>
 #include <boost/filesystem.hpp>
 
@@ -31,17 +35,13 @@ namespace nfd {
 namespace tests {
 
 IdentityManagementFixture::IdentityManagementFixture()
-  : m_keyChain("sqlite3", "file")
+  : m_keyChain("pib-memory:", "tpm-memory:")
 {
-  m_keyChain.getDefaultCertificate(); // side effect: create a default cert if it doesn't exist
+  m_keyChain.createIdentity("/DEFAULT");
 }
 
 IdentityManagementFixture::~IdentityManagementFixture()
 {
-  for (const auto& id : m_identities) {
-    m_keyChain.deleteIdentity(id);
-  }
-
   boost::system::error_code ec;
   for (const auto& certFile : m_certFiles) {
     boost::filesystem::remove(certFile, ec); // ignore error
@@ -53,10 +53,9 @@ IdentityManagementFixture::addIdentity(const Name& identity, const ndn::KeyParam
 {
   try {
     m_keyChain.createIdentity(identity, params);
-    m_identities.push_back(identity);
     return true;
   }
-  catch (std::runtime_error&) {
+  catch (const std::runtime_error&) {
     return false;
   }
 }
@@ -64,11 +63,11 @@ IdentityManagementFixture::addIdentity(const Name& identity, const ndn::KeyParam
 bool
 IdentityManagementFixture::saveIdentityCertificate(const Name& identity, const std::string& filename, bool wantAdd)
 {
-  shared_ptr<ndn::IdentityCertificate> cert;
+  ndn::security::v2::Certificate cert;
   try {
-    cert = m_keyChain.getCertificate(m_keyChain.getDefaultCertificateNameForIdentity(identity));
+    cert = m_keyChain.getPib().getIdentity(identity).getDefaultKey().getDefaultCertificate();
   }
-  catch (const ndn::SecPublicInfo::Error&) {
+  catch (const ndn::security::Pib::Error&) {
     if (wantAdd && this->addIdentity(identity)) {
       return this->saveIdentityCertificate(identity, filename, false);
     }
@@ -77,7 +76,7 @@ IdentityManagementFixture::saveIdentityCertificate(const Name& identity, const s
 
   m_certFiles.push_back(filename);
   try {
-    ndn::io::save(*cert, filename);
+    ndn::io::save(cert, filename);
     return true;
   }
   catch (const ndn::io::Error&) {

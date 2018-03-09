@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,6 +27,7 @@
 #define NFD_DAEMON_FACE_DATAGRAM_TRANSPORT_HPP
 
 #include "transport.hpp"
+#include "socket-utils.hpp"
 #include "core/global-io.hpp"
 
 #include <array>
@@ -54,6 +55,9 @@ public:
   explicit
   DatagramTransport(typename protocol::socket&& socket);
 
+  ssize_t
+  getSendQueueLength() override;
+
   /** \brief Receive datagram, translate buffer into packet, deliver to parent class.
    */
   void
@@ -61,10 +65,10 @@ public:
                   const boost::system::error_code& error);
 
 protected:
-  virtual void
+  void
   doClose() override;
 
-  virtual void
+  void
   doSend(Transport::Packet&& packet) override;
 
   void
@@ -79,10 +83,10 @@ protected:
   processErrorCode(const boost::system::error_code& error);
 
   bool
-  hasBeenUsedRecently() const;
+  hasRecentlyReceived() const;
 
   void
-  resetRecentUsage();
+  resetRecentlyReceived();
 
   static EndpointId
   makeEndpointId(const typename protocol::endpoint& ep);
@@ -95,19 +99,41 @@ protected:
 
 private:
   std::array<uint8_t, ndn::MAX_NDN_PACKET_SIZE> m_receiveBuffer;
-  bool m_hasBeenUsedRecently;
+  bool m_hasRecentlyReceived;
 };
 
 
 template<class T, class U>
 DatagramTransport<T, U>::DatagramTransport(typename DatagramTransport::protocol::socket&& socket)
   : m_socket(std::move(socket))
-  , m_hasBeenUsedRecently(false)
+  , m_hasRecentlyReceived(false)
 {
+  boost::asio::socket_base::send_buffer_size sendBufferSizeOption;
+  boost::system::error_code error;
+  m_socket.get_option(sendBufferSizeOption, error);
+  if (error) {
+    NFD_LOG_FACE_WARN("Failed to obtain send queue capacity from socket: " << error.message());
+    this->setSendQueueCapacity(QUEUE_ERROR);
+  }
+  else {
+    this->setSendQueueCapacity(sendBufferSizeOption.value());
+  }
+
   m_socket.async_receive_from(boost::asio::buffer(m_receiveBuffer), m_sender,
                               bind(&DatagramTransport<T, U>::handleReceive, this,
                                    boost::asio::placeholders::error,
                                    boost::asio::placeholders::bytes_transferred));
+}
+
+template<class T, class U>
+ssize_t
+DatagramTransport<T, U>::getSendQueueLength()
+{
+  ssize_t queueLength = getTxQueueLength(m_socket.native_handle());
+  if (queueLength == QUEUE_ERROR) {
+    NFD_LOG_FACE_WARN("Failed to obtain send queue length from socket: " << std::strerror(errno));
+  }
+  return queueLength;
 }
 
 template<class T, class U>
@@ -152,13 +178,13 @@ DatagramTransport<T, U>::receiveDatagram(const uint8_t* buffer, size_t nBytesRec
   if (error)
     return processErrorCode(error);
 
-  NFD_LOG_FACE_TRACE("Received: " << nBytesReceived << " bytes");
+  NFD_LOG_FACE_TRACE("Received: " << nBytesReceived << " bytes from " << m_sender);
 
   bool isOk = false;
   Block element;
   std::tie(isOk, element) = Block::fromBuffer(buffer, nBytesReceived);
   if (!isOk) {
-    NFD_LOG_FACE_WARN("Failed to parse incoming packet");
+    NFD_LOG_FACE_WARN("Failed to parse incoming packet from " << m_sender);
     // This packet won't extend the face lifetime
     return;
   }
@@ -167,7 +193,7 @@ DatagramTransport<T, U>::receiveDatagram(const uint8_t* buffer, size_t nBytesRec
     // This packet won't extend the face lifetime
     return;
   }
-  m_hasBeenUsedRecently = true;
+  m_hasRecentlyReceived = true;
 
   Transport::Packet tp(std::move(element));
   tp.remoteEndpoint = makeEndpointId(m_sender);
@@ -209,38 +235,37 @@ DatagramTransport<T, U>::processErrorCode(const boost::system::error_code& error
   if (getState() == TransportState::CLOSING ||
       getState() == TransportState::FAILED ||
       getState() == TransportState::CLOSED ||
-      error == boost::asio::error::operation_aborted)
+      error == boost::asio::error::operation_aborted) {
     // transport is shutting down, ignore any errors
     return;
+  }
 
-  if (getPersistency() == ndn::nfd::FacePersistency::FACE_PERSISTENCY_PERMANENT) {
+  if (getPersistency() == ndn::nfd::FACE_PERSISTENCY_PERMANENT) {
     NFD_LOG_FACE_DEBUG("Permanent face ignores error: " << error.message());
     return;
   }
 
-  if (error != boost::asio::error::eof)
-    NFD_LOG_FACE_WARN("Send or receive operation failed: " << error.message());
-
+  NFD_LOG_FACE_ERROR("Send or receive operation failed: " << error.message());
   this->setState(TransportState::FAILED);
   doClose();
 }
 
 template<class T, class U>
-inline bool
-DatagramTransport<T, U>::hasBeenUsedRecently() const
+bool
+DatagramTransport<T, U>::hasRecentlyReceived() const
 {
-  return m_hasBeenUsedRecently;
+  return m_hasRecentlyReceived;
 }
 
 template<class T, class U>
-inline void
-DatagramTransport<T, U>::resetRecentUsage()
+void
+DatagramTransport<T, U>::resetRecentlyReceived()
 {
-  m_hasBeenUsedRecently = false;
+  m_hasRecentlyReceived = false;
 }
 
 template<class T, class U>
-inline Transport::EndpointId
+Transport::EndpointId
 DatagramTransport<T, U>::makeEndpointId(const typename protocol::endpoint& ep)
 {
   return 0;

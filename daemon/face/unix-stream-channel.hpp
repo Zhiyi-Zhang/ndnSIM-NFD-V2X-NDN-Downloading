@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -34,6 +34,8 @@ namespace unix_stream {
 typedef boost::asio::local::stream_protocol::endpoint Endpoint;
 } // namespace unix_stream
 
+namespace face {
+
 /**
  * \brief Class implementing a local channel to create faces
  *
@@ -46,9 +48,14 @@ public:
   /**
    * \brief UnixStreamChannel-related error
    */
-  struct Error : public std::runtime_error
+  class Error : public std::runtime_error
   {
-    Error(const std::string& what) : std::runtime_error(what) {}
+  public:
+    explicit
+    Error(const std::string& what)
+      : std::runtime_error(what)
+    {
+    }
   };
 
   /**
@@ -57,27 +64,41 @@ public:
    * To enable creation of faces upon incoming connections, one
    * needs to explicitly call UnixStreamChannel::listen method.
    */
-  explicit
-  UnixStreamChannel(const unix_stream::Endpoint& endpoint);
+  UnixStreamChannel(const unix_stream::Endpoint& endpoint, bool wantCongestionMarking);
 
   ~UnixStreamChannel() override;
 
+  bool
+  isListening() const override
+  {
+    return m_acceptor.is_open();
+  }
+
+  size_t
+  size() const override
+  {
+    return m_size;
+  }
+
   /**
-   * \brief Enable listening on the local endpoint, accept connections,
-   *        and create faces when a connection is made
+   * \brief Start listening
+   *
+   * Enable listening on the Unix socket, waiting for incoming connections,
+   * and creating a face when a connection is made.
+   *
+   * Faces created in this way will have on-demand persistency.
+   *
    * \param onFaceCreated  Callback to notify successful creation of the face
    * \param onAcceptFailed Callback to notify when channel fails (accept call
    *                       returns an error)
    * \param backlog        The maximum length of the queue of pending incoming
    *                       connections
+   * \throw Error
    */
   void
   listen(const FaceCreatedCallback& onFaceCreated,
          const FaceCreationFailedCallback& onAcceptFailed,
          int backlog = boost::asio::local::stream_protocol::acceptor::max_connections);
-
-  bool
-  isListening() const;
 
 private:
   void
@@ -90,17 +111,14 @@ private:
                const FaceCreationFailedCallback& onAcceptFailed);
 
 private:
-  unix_stream::Endpoint m_endpoint;
+  const unix_stream::Endpoint m_endpoint;
   boost::asio::local::stream_protocol::acceptor m_acceptor;
   boost::asio::local::stream_protocol::socket m_socket;
+  size_t m_size;
+  bool m_wantCongestionMarking;
 };
 
-inline bool
-UnixStreamChannel::isListening() const
-{
-  return m_acceptor.is_open();
-}
-
+} // namespace face
 } // namespace nfd
 
 #endif // NFD_DAEMON_FACE_UNIX_STREAM_CHANNEL_HPP

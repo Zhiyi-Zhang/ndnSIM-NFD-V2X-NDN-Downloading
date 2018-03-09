@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -28,6 +28,8 @@
 
 #include "datagram-transport.hpp"
 
+#include <ndn-cxx/net/network-interface.hpp>
+
 namespace nfd {
 namespace face {
 
@@ -45,27 +47,48 @@ DatagramTransport<boost::asio::ip::udp, Multicast>::makeEndpointId(const protoco
 class MulticastUdpTransport final : public DatagramTransport<boost::asio::ip::udp, Multicast>
 {
 public:
+  class Error : public std::runtime_error
+  {
+  public:
+    explicit
+    Error(const std::string& what)
+      : std::runtime_error(what)
+    {
+    }
+  };
+
   /**
    * \brief Creates a UDP-based transport for multicast communication
-   * \param localEndpoint local endpoint
    * \param multicastGroup multicast group
-   * \param recvSocket socket used to receive packets
+   * \param recvSocket socket used to receive multicast packets
    * \param sendSocket socket used to send to the multicast group
+   * \param linkType either `ndn::nfd::LINK_TYPE_MULTI_ACCESS` or `ndn::nfd::LINK_TYPE_AD_HOC`
    */
-  MulticastUdpTransport(const protocol::endpoint& localEndpoint,
-                        const protocol::endpoint& multicastGroup,
+  MulticastUdpTransport(const protocol::endpoint& multicastGroup,
                         protocol::socket&& recvSocket,
-                        protocol::socket&& sendSocket);
+                        protocol::socket&& sendSocket,
+                        ndn::nfd::LinkType linkType);
 
-protected:
-  virtual void
-  beforeChangePersistency(ndn::nfd::FacePersistency newPersistency) final;
+  ssize_t
+  getSendQueueLength() final;
+
+  static void
+  openRxSocket(protocol::socket& sock,
+               const protocol::endpoint& multicastGroup,
+               const boost::asio::ip::address& localAddress,
+               const shared_ptr<const ndn::net::NetworkInterface>& netif = nullptr);
+
+  static void
+  openTxSocket(protocol::socket& sock,
+               const protocol::endpoint& localEndpoint,
+               const shared_ptr<const ndn::net::NetworkInterface>& netif = nullptr,
+               bool enableLoopback = false);
 
 private:
-  virtual void
+  void
   doSend(Transport::Packet&& packet) final;
 
-  virtual void
+  void
   doClose() final;
 
 private:

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -35,6 +35,8 @@ namespace tcp {
 typedef boost::asio::ip::tcp::endpoint Endpoint;
 } // namespace tcp
 
+namespace face {
+
 /**
  * \brief Class implementing TCP-based channel to create faces
  *
@@ -51,8 +53,19 @@ public:
    * To enable creation faces upon incoming connections,
    * one needs to explicitly call TcpChannel::listen method.
    */
-  explicit
-  TcpChannel(const tcp::Endpoint& localEndpoint);
+  TcpChannel(const tcp::Endpoint& localEndpoint, bool wantCongestionMarking);
+
+  bool
+  isListening() const override
+  {
+    return m_acceptor.is_open();
+  }
+
+  size_t
+  size() const override
+  {
+    return m_channelFaces.size();
+  }
 
   /**
    * \brief Enable listening on the local endpoint, accept connections,
@@ -69,29 +82,19 @@ public:
          int backlog = boost::asio::ip::tcp::acceptor::max_connections);
 
   /**
-   * \brief Create a face by establishing connection to remote endpoint
+   * \brief Create a face by establishing a TCP connection to \p remoteEndpoint
    */
   void
   connect(const tcp::Endpoint& remoteEndpoint,
-          bool wantLocalFieldsEnabled,
+          const FaceParams& params,
           const FaceCreatedCallback& onFaceCreated,
           const FaceCreationFailedCallback& onConnectFailed,
-          const time::seconds& timeout = time::seconds(4));
-
-  /**
-   * \brief Get number of faces in the channel
-   */
-  size_t
-  size() const;
-
-  bool
-  isListening() const;
+          time::nanoseconds timeout = 8_s);
 
 private:
   void
   createFace(boost::asio::ip::tcp::socket&& socket,
-             bool isOnDemand,
-             bool wantLocalFieldsEnabled,
+             const FaceParams& params,
              const FaceCreatedCallback& onFaceCreated);
 
   void
@@ -105,30 +108,27 @@ private:
 
   void
   handleConnect(const boost::system::error_code& error,
+                const tcp::Endpoint& remoteEndpoint,
                 const shared_ptr<boost::asio::ip::tcp::socket>& socket,
-                bool wantLocalFieldsEnabled,
+                const FaceParams& params,
                 const scheduler::EventId& connectTimeoutEvent,
                 const FaceCreatedCallback& onFaceCreated,
                 const FaceCreationFailedCallback& onConnectFailed);
 
   void
-  handleConnectTimeout(const shared_ptr<boost::asio::ip::tcp::socket>& socket,
+  handleConnectTimeout(const tcp::Endpoint& remoteEndpoint,
+                       const shared_ptr<boost::asio::ip::tcp::socket>& socket,
                        const FaceCreationFailedCallback& onConnectFailed);
 
 private:
-  std::map<tcp::Endpoint, shared_ptr<Face>> m_channelFaces;
-
-  tcp::Endpoint m_localEndpoint;
+  const tcp::Endpoint m_localEndpoint;
   boost::asio::ip::tcp::acceptor m_acceptor;
-  boost::asio::ip::tcp::socket m_acceptSocket;
+  boost::asio::ip::tcp::socket m_socket;
+  std::map<tcp::Endpoint, shared_ptr<Face>> m_channelFaces;
+  bool m_wantCongestionMarking;
 };
 
-inline bool
-TcpChannel::isListening() const
-{
-  return m_acceptor.is_open();
-}
-
+} // namespace face
 } // namespace nfd
 
 #endif // NFD_DAEMON_FACE_TCP_CHANNEL_HPP

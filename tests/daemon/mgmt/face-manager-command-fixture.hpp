@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -29,10 +29,7 @@
 #include "mgmt/face-manager.hpp"
 #include "fw/face-table.hpp"
 
-#include "tests/identity-management-fixture.hpp"
-
-#include <ndn-cxx/mgmt/dispatcher.hpp>
-#include <ndn-cxx/util/dummy-client-face.hpp>
+#include "tests/manager-common-fixture.hpp"
 
 namespace nfd {
 namespace tests {
@@ -45,14 +42,23 @@ public:
   ~FaceManagerCommandNode();
 
 public:
-  FaceTable faceTable;
+  const Face*
+  findFaceByUri(const std::string& uri) const;
+
+  FaceId
+  findFaceIdByUri(const std::string& uri) const;
+
+public:
   ndn::util::DummyClientFace face;
   ndn::mgmt::Dispatcher dispatcher;
   shared_ptr<CommandAuthenticator> authenticator;
+
+  FaceTable faceTable;
+  FaceSystem faceSystem;
   FaceManager manager;
 };
 
-class FaceManagerCommandFixture : public IdentityManagementTimeFixture
+class FaceManagerCommandFixture : public CommandInterestSignerFixture
 {
 public:
   FaceManagerCommandFixture();

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,7 +26,8 @@
 #ifndef NFD_TOOLS_NDN_AUTOCONFIG_GUESS_FROM_IDENTITY_NAME_HPP
 #define NFD_TOOLS_NDN_AUTOCONFIG_GUESS_FROM_IDENTITY_NAME_HPP
 
-#include "base-dns.hpp"
+#include "stage.hpp"
+#include <ndn-cxx/security/key-chain.hpp>
 
 namespace ndn {
 namespace tools {
@@ -53,22 +54,29 @@ namespace autoconfig {
  *     The DNS server should answer with an SRV record that contains the hostname and UDP port
  *     number of the home NDN router of this user's site.
  */
-class GuessFromIdentityName : public BaseDns
+class GuessFromIdentityName : public Stage
 {
 public:
-  /**
-   * @brief Create stage to guess home router based on the default identity name
-   * @sa Base::Base
-   */
-  GuessFromIdentityName(Face& face, KeyChain& keyChain,
-                        const NextStageCallback& nextStageOnFailure);
+  explicit
+  GuessFromIdentityName(KeyChain& keyChain);
 
-  virtual void
-  start() override;
+  const std::string&
+  getName() const override
+  {
+    static const std::string STAGE_NAME("guess from identity name");
+    return STAGE_NAME;
+  }
+
+private:
+  void
+  doStart() override;
+
+private:
+  KeyChain& m_keyChain;
 };
 
 } // namespace autoconfig
 } // namespace tools
 } // namespace ndn
 
-#endif // NFD_TOOLS_NDN_AUTOCONFIG_GUESSING_FROM_IDENTITY_NAME_HPP
+#endif // NFD_TOOLS_NDN_AUTOCONFIG_GUESS_FROM_IDENTITY_NAME_HPP

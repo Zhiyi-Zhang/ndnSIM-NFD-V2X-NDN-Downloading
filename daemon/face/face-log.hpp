@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -53,6 +53,9 @@ public:
   const T& obj;
 };
 
+} // namespace face
+} // namespace nfd
+
 /** \defgroup FaceLogging Face logging macros
  *
  * These macros augment the log message with some face-specific information,
@@ -62,6 +65,7 @@ public:
  * @{
  */
 
+/** \cond */
 #define NFD_LOG_FACE(level, msg) NFD_LOG_##level( \
   ::nfd::face::FaceLogHelper< \
     typename std::remove_cv< \
@@ -69,6 +73,7 @@ public:
     >::type \
   >(*this) \
   << msg)
+/** \endcond */
 
 /** \brief Log a message at TRACE level */
 #define NFD_LOG_FACE_TRACE(msg) NFD_LOG_FACE(TRACE, msg)
@@ -86,8 +91,5 @@ public:
 #define NFD_LOG_FACE_ERROR(msg) NFD_LOG_FACE(ERROR, msg)
 
 /** @} */
-
-} // namespace face
-} // namespace nfd
 
 #endif // NFD_DAEMON_FACE_FACE_LOG_HPP

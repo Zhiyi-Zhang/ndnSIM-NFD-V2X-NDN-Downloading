@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -30,11 +30,6 @@ namespace nfd {
 namespace tools {
 namespace nfdc {
 
-ForwarderGeneralModule::ForwarderGeneralModule()
-  : m_nfdIdCollector(nullptr)
-{
-}
-
 void
 ForwarderGeneralModule::fetchStatus(Controller& controller,
                                     const function<void()>& onSuccess,
@@ -55,34 +50,22 @@ calculateUptime(const ForwarderStatus& status)
   return status.getCurrentTimestamp() - status.getStartTimestamp();
 }
 
-const Name&
-ForwarderGeneralModule::getNfdId() const
-{
-  if (m_nfdIdCollector != nullptr && m_nfdIdCollector->hasNfdId()) {
-    return m_nfdIdCollector->getNfdId();
-  }
-
-  static Name unavailable("/nfdId-unavailable");
-  return unavailable;
-}
-
 void
 ForwarderGeneralModule::formatStatusXml(std::ostream& os) const
 {
-  this->formatItemXml(os, m_status, this->getNfdId());
+  this->formatItemXml(os, m_status);
 }
 
 void
-ForwarderGeneralModule::formatItemXml(std::ostream& os, const ForwarderStatus& item,
-                                      const Name& nfdId) const
+ForwarderGeneralModule::formatItemXml(std::ostream& os, const ForwarderStatus& item) const
 {
   os << "<generalStatus>";
 
-  os << "<nfdId>" << nfdId << "</nfdId>";
   os << "<version>" << xml::Text{item.getNfdVersion()} << "</version>";
   os << "<startTime>" << xml::formatTimestamp(item.getStartTimestamp()) << "</startTime>";
   os << "<currentTime>" << xml::formatTimestamp(item.getCurrentTimestamp()) << "</currentTime>";
-  os << "<uptime>" << xml::formatDuration(calculateUptime(item)) << "</uptime>";
+  os << "<uptime>" << xml::formatDuration(time::duration_cast<time::seconds>(calculateUptime(item)))
+     << "</uptime>";
 
   os << "<nNameTreeEntries>" << item.getNNameTreeEntries() << "</nNameTreeEntries>";
   os << "<nFibEntries>" << item.getNFibEntries() << "</nFibEntries>";
@@ -93,12 +76,12 @@ ForwarderGeneralModule::formatItemXml(std::ostream& os, const ForwarderStatus& i
   os << "<packetCounters>";
   os << "<incomingPackets>"
      << "<nInterests>" << item.getNInInterests() << "</nInterests>"
-     << "<nDatas>" << item.getNInDatas() << "</nDatas>"
+     << "<nData>" << item.getNInData() << "</nData>"
      << "<nNacks>" << item.getNInNacks() << "</nNacks>"
      << "</incomingPackets>";
   os << "<outgoingPackets>"
      << "<nInterests>" << item.getNOutInterests() << "</nInterests>"
-     << "<nDatas>" << item.getNOutDatas() << "</nDatas>"
+     << "<nData>" << item.getNOutData() << "</nData>"
      << "<nNacks>" << item.getNOutNacks() << "</nNacks>"
      << "</outgoingPackets>";
   os << "</packetCounters>";
@@ -110,18 +93,16 @@ void
 ForwarderGeneralModule::formatStatusText(std::ostream& os) const
 {
   os << "General NFD status:\n";
-  this->formatItemText(os, m_status, this->getNfdId());
+  this->formatItemText(os, m_status);
 }
 
 void
-ForwarderGeneralModule::formatItemText(std::ostream& os, const ForwarderStatus& item,
-                                       const Name& nfdId) const
+ForwarderGeneralModule::formatItemText(std::ostream& os, const ForwarderStatus& item) const
 {
-  os << "                 nfdId=" << nfdId << "\n";
   os << "               version=" << item.getNfdVersion() << "\n";
   os << "             startTime=" << text::formatTimestamp(item.getStartTimestamp()) << "\n";
   os << "           currentTime=" << text::formatTimestamp(item.getCurrentTimestamp()) << "\n";
-  os << "                uptime=" << text::formatDuration(calculateUptime(item), true) << "\n";
+  os << "                uptime=" << text::formatDuration<time::seconds>(calculateUptime(item), true) << "\n";
 
   os << "      nNameTreeEntries=" << item.getNNameTreeEntries() << "\n";
   os << "           nFibEntries=" << item.getNFibEntries() << "\n";
@@ -131,58 +112,10 @@ ForwarderGeneralModule::formatItemText(std::ostream& os, const ForwarderStatus& 
 
   os << "          nInInterests=" << item.getNInInterests() << "\n";
   os << "         nOutInterests=" << item.getNOutInterests() << "\n";
-  os << "              nInDatas=" << item.getNInDatas() << "\n";
-  os << "             nOutDatas=" << item.getNOutDatas() << "\n";
+  os << "               nInData=" << item.getNInData() << "\n";
+  os << "              nOutData=" << item.getNOutData() << "\n";
   os << "              nInNacks=" << item.getNInNacks() << "\n";
   os << "             nOutNacks=" << item.getNOutNacks() << "\n";
-}
-
-NfdIdCollector::NfdIdCollector(unique_ptr<ndn::Validator> inner)
-  : m_inner(std::move(inner))
-  , m_hasNfdId(false)
-{
-  BOOST_ASSERT(m_inner != nullptr);
-}
-
-const Name&
-NfdIdCollector::getNfdId() const
-{
-  if (!m_hasNfdId) {
-    BOOST_THROW_EXCEPTION(std::runtime_error("NfdId is unavailable"));
-  }
-
-  return m_nfdId;
-}
-
-void
-NfdIdCollector::checkPolicy(const Data& data, int nSteps,
-                            const ndn::OnDataValidated& accept,
-                            const ndn::OnDataValidationFailed& reject,
-                            std::vector<shared_ptr<ndn::ValidationRequest>>& nextSteps)
-{
-  ndn::OnDataValidated accepted = [this, accept] (const shared_ptr<const Data>& data) {
-    accept(data); // pass the Data to Validator user's validated callback
-
-    if (m_hasNfdId) {
-      return;
-    }
-
-    const ndn::Signature& sig = data->getSignature();
-    if (!sig.hasKeyLocator()) {
-      return;
-    }
-
-    const ndn::KeyLocator& kl = sig.getKeyLocator();
-    if (kl.getType() != ndn::KeyLocator::KeyLocator_Name) {
-      return;
-    }
-
-    m_nfdId = kl.getName();
-    m_hasNfdId = true;
-  };
-
-  BOOST_ASSERT(nSteps == 0);
-  m_inner->validate(data, accepted, reject);
 }
 
 } // namespace nfdc

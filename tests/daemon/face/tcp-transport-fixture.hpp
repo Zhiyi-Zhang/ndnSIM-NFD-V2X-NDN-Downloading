@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -30,7 +30,6 @@
 #include "face/face.hpp"
 
 #include "dummy-receive-link-service.hpp"
-#include "test-ip.hpp"
 #include "tests/limited-io.hpp"
 
 namespace nfd {
@@ -74,7 +73,7 @@ protected:
   }
 
   void
-  initialize(ip::address address = ip::address_v4::loopback(),
+  initialize(ip::address address,
              ndn::nfd::FacePersistency persistency = ndn::nfd::FACE_PERSISTENCY_PERSISTENT)
   {
     tcp::endpoint remoteEp(address, 7070);

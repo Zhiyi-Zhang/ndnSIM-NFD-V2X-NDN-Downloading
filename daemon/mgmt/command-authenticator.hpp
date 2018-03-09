@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -28,8 +28,14 @@
 
 #include "core/config-file.hpp"
 #include <ndn-cxx/mgmt/dispatcher.hpp>
-#include <ndn-cxx/security/command-interest-validator.hpp>
-#include <ndn-cxx/security/public-key.hpp>
+
+namespace ndn {
+namespace security {
+namespace v2 {
+class Validator;
+} // namespace v2
+} // namespace security
+} // namespace ndn
 
 namespace nfd {
 
@@ -61,18 +67,9 @@ private:
   void
   processConfig(const ConfigSection& section, bool isDryRun, const std::string& filename);
 
-  static std::pair<bool, Name>
-  extractKeyName(const Interest& interest);
-
 private:
-  struct AuthorizedCerts
-  {
-    bool allowAny = false;
-    std::unordered_map<Name, ndn::PublicKey> certs; ///< keyName => publicKey
-  };
-  std::unordered_map<std::string, AuthorizedCerts> m_moduleAuth; ///< module => certs
-
-  ndn::security::CommandInterestValidator m_validator;
+  /// module => validator
+  std::unordered_map<std::string, shared_ptr<ndn::security::v2::Validator>> m_validators;
 };
 
 } // namespace nfd

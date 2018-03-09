@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,10 +25,13 @@
 
 #include "face/generic-link-service.hpp"
 #include "face/face.hpp"
-#include "dummy-transport.hpp"
-#include <ndn-cxx/lp/tags.hpp>
 
-#include "tests/test-common.hpp"
+#include "test-common.hpp"
+#include "dummy-transport.hpp"
+
+#include <ndn-cxx/lp/empty-value.hpp>
+#include <ndn-cxx/lp/prefix-announcement.hpp>
+#include <ndn-cxx/lp/tags.hpp>
 
 namespace nfd {
 namespace face {
@@ -36,11 +39,18 @@ namespace tests {
 
 using namespace nfd::tests;
 
+static lp::PrefixAnnouncement
+makePrefixAnnouncement(Name announcedName)
+{
+  Name paName = Name("self-learning").append(announcedName).appendVersion();
+  return lp::PrefixAnnouncement(makeData(paName));
+}
+
 BOOST_AUTO_TEST_SUITE(Face)
 
 using nfd::Face;
 
-class GenericLinkServiceFixture : public BaseFixture
+class GenericLinkServiceFixture : public UnitTestTimeFixture
 {
 protected:
   GenericLinkServiceFixture()
@@ -53,10 +63,18 @@ protected:
   }
 
   void
-  initialize(const GenericLinkService::Options& options)
+  initialize(const GenericLinkService::Options& options,
+             ssize_t mtu = MTU_UNLIMITED,
+             ssize_t sendQueueCapacity = QUEUE_UNSUPPORTED)
   {
     face.reset(new Face(make_unique<GenericLinkService>(options),
-                        make_unique<DummyTransport>()));
+                        make_unique<DummyTransport>("dummy://",
+                                                    "dummy://",
+                                                    ndn::nfd::FACE_SCOPE_NON_LOCAL,
+                                                    ndn::nfd::FACE_PERSISTENCY_PERSISTENT,
+                                                    ndn::nfd::LINK_TYPE_POINT_TO_POINT,
+                                                    mtu,
+                                                    sendQueueCapacity)));
     service = static_cast<GenericLinkService*>(face->getLinkService());
     transport = static_cast<DummyTransport*>(face->getTransport());
 
@@ -254,7 +272,6 @@ BOOST_AUTO_TEST_CASE(ReceiveIdlePacket)
 
 BOOST_AUTO_TEST_SUITE_END() // SimpleSendReceive
 
-
 BOOST_AUTO_TEST_SUITE(Fragmentation)
 
 BOOST_AUTO_TEST_CASE(FragmentationDisabledExceedMtuDrop)
@@ -393,6 +410,421 @@ BOOST_AUTO_TEST_CASE(ReassemblyDisabledDropFragCount)
 
 BOOST_AUTO_TEST_SUITE_END() // Fragmentation
 
+BOOST_AUTO_TEST_SUITE(Reliability)
+
+BOOST_AUTO_TEST_CASE(SendInterest)
+{
+  // Initialize with Options that enables reliability
+  GenericLinkService::Options options;
+  options.allowLocalFields = false;
+  options.reliabilityOptions.isEnabled = true;
+  initialize(options);
+
+  shared_ptr<Interest> interest1 = makeInterest("/localhost/test");
+
+  face->sendInterest(*interest1);
+
+  BOOST_CHECK_EQUAL(service->getCounters().nOutInterests, 1);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet interest1pkt;
+  BOOST_REQUIRE_NO_THROW(interest1pkt.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK(interest1pkt.has<lp::FragmentField>());
+  BOOST_CHECK(interest1pkt.has<lp::TxSequenceField>());
+}
+
+BOOST_AUTO_TEST_CASE(SendData)
+{
+  // Initialize with Options that enables reliability
+  GenericLinkService::Options options;
+  options.allowLocalFields = false;
+  options.reliabilityOptions.isEnabled = true;
+  initialize(options);
+
+  shared_ptr<Data> data1 = makeData("/localhost/test");
+
+  face->sendData(*data1);
+
+  BOOST_CHECK_EQUAL(service->getCounters().nOutData, 1);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet data1pkt;
+  BOOST_REQUIRE_NO_THROW(data1pkt.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK(data1pkt.has<lp::FragmentField>());
+  BOOST_CHECK(data1pkt.has<lp::TxSequenceField>());
+}
+
+BOOST_AUTO_TEST_CASE(SendNack)
+{
+  // Initialize with Options that enables reliability
+  GenericLinkService::Options options;
+  options.allowLocalFields = false;
+  options.reliabilityOptions.isEnabled = true;
+  initialize(options);
+
+  lp::Nack nack1 = makeNack("/localhost/test", 323, lp::NackReason::NO_ROUTE);
+
+  face->sendNack(nack1);
+
+  BOOST_CHECK_EQUAL(service->getCounters().nOutNacks, 1);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet nack1pkt;
+  BOOST_REQUIRE_NO_THROW(nack1pkt.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK(nack1pkt.has<lp::NackField>());
+  BOOST_CHECK(nack1pkt.has<lp::FragmentField>());
+  BOOST_CHECK(nack1pkt.has<lp::TxSequenceField>());
+}
+
+BOOST_AUTO_TEST_SUITE_END() // Reliability
+
+// congestion detection and marking
+BOOST_AUTO_TEST_SUITE(CongestionMark)
+
+BOOST_AUTO_TEST_CASE(NoCongestion)
+{
+  GenericLinkService::Options options;
+  options.allowCongestionMarking = true;
+  options.baseCongestionMarkingInterval = time::milliseconds(100);
+  initialize(options, MTU_UNLIMITED, 65536);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+
+  // congestion threshold will be 32768 bytes, since min(65536, 65536 / 2) = 32768 bytes
+
+  // no congestion
+  transport->setSendQueueLength(0);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet pkt1;
+  BOOST_REQUIRE_NO_THROW(pkt1.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt1.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+
+  // no congestion
+  transport->setSendQueueLength(32768);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 2);
+  lp::Packet pkt2;
+  BOOST_REQUIRE_NO_THROW(pkt2.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt2.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+}
+
+BOOST_AUTO_TEST_CASE(CongestionCoDel)
+{
+  GenericLinkService::Options options;
+  options.allowCongestionMarking = true;
+  options.baseCongestionMarkingInterval = time::milliseconds(100);
+  initialize(options, MTU_UNLIMITED, 65536);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, time::steady_clock::TimePoint::min());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+
+  // congestion threshold will be 32768 bytes, since min(65536, 65536 / 2) = 32768 bytes
+
+  // first congested packet, will be marked
+  transport->setSendQueueLength(32769);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet pkt1;
+  BOOST_REQUIRE_NO_THROW(pkt1.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt1.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt1.get<lp::CongestionMarkField>(), 1);
+  time::steady_clock::TimePoint nextMarkTime = time::steady_clock::now() + time::milliseconds(100);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  time::steady_clock::TimePoint lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 1);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 1);
+
+  // advance clock to half of marking interval cycle
+  advanceClocks(time::milliseconds(50));
+
+  // second congested packet, but within marking interval, will not be marked
+  transport->setSendQueueLength(33000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 2);
+  lp::Packet pkt2;
+  BOOST_REQUIRE_NO_THROW(pkt2.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt2.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 1);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 1);
+
+  // advance clocks past end of initial interval cycle
+  this->advanceClocks(time::milliseconds(51));
+
+  // first congested packet after waiting marking interval, will be marked
+  transport->setSendQueueLength(40000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 3);
+  lp::Packet pkt3;
+  BOOST_REQUIRE_NO_THROW(pkt3.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt3.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt3.get<lp::CongestionMarkField>(), 1);
+  time::nanoseconds markingInterval(
+    static_cast<time::nanoseconds::rep>(options.baseCongestionMarkingInterval.count() /
+                                        std::sqrt(service->m_nMarkedSinceInMarkingState)));
+  nextMarkTime += markingInterval;
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 2);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 2);
+
+  // advance clock partway through current marking interval
+  this->advanceClocks(markingInterval - time::milliseconds(10));
+
+  // still congested, but within marking interval cycle
+  transport->setSendQueueLength(38000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 4);
+  lp::Packet pkt4;
+  BOOST_REQUIRE_NO_THROW(pkt4.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt4.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 2);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 2);
+
+  // advance clocks past end of current marking interval cycle
+  this->advanceClocks(time::milliseconds(11));
+
+  // still congested, after marking interval cycle
+  transport->setSendQueueLength(39000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 5);
+  lp::Packet pkt5;
+  BOOST_REQUIRE_NO_THROW(pkt5.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt5.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt5.get<lp::CongestionMarkField>(), 1);
+  markingInterval = time::nanoseconds(
+    static_cast<time::nanoseconds::rep>(options.baseCongestionMarkingInterval.count() /
+                                        std::sqrt(service->m_nMarkedSinceInMarkingState)));
+  nextMarkTime += markingInterval;
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 3);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 3);
+
+  this->advanceClocks(time::milliseconds(1));
+
+  // still congested, but within marking interval cycle
+  transport->setSendQueueLength(38000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 6);
+  lp::Packet pkt6;
+  BOOST_REQUIRE_NO_THROW(pkt6.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt6.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 3);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 3);
+
+  this->advanceClocks(markingInterval);
+
+  // still congested, after marking interval cycle
+  transport->setSendQueueLength(34000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 7);
+  lp::Packet pkt7;
+  BOOST_REQUIRE_NO_THROW(pkt7.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt7.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt7.get<lp::CongestionMarkField>(), 1);
+  markingInterval = time::nanoseconds(
+    static_cast<time::nanoseconds::rep>(options.baseCongestionMarkingInterval.count() /
+                                        std::sqrt(service->m_nMarkedSinceInMarkingState)));
+  nextMarkTime += markingInterval;
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 4);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 4);
+
+  // no more congestion
+  transport->setSendQueueLength(30000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 8);
+  lp::Packet pkt8;
+  BOOST_REQUIRE_NO_THROW(pkt8.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt8.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 4);
+
+  this->advanceClocks(time::milliseconds(50));
+
+  // send queue congested again, but can't mark packet because within one full interval of last mark
+  transport->setSendQueueLength(50000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 9);
+  lp::Packet pkt9;
+  BOOST_REQUIRE_NO_THROW(pkt9.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt9.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 4);
+
+  // advance clock past full 100ms interval since last mark
+  this->advanceClocks(time::milliseconds(51));
+
+  transport->setSendQueueLength(40000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 10);
+  lp::Packet pkt10;
+  BOOST_REQUIRE_NO_THROW(pkt10.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt10.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt10.get<lp::CongestionMarkField>(), 1);
+  nextMarkTime = time::steady_clock::now() + time::milliseconds(100);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 1);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 5);
+
+  // advance clock partway through 100ms marking interval
+  this->advanceClocks(time::milliseconds(50));
+
+  // not marked since within 100ms window before can mark again
+  transport->setSendQueueLength(50000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 11);
+  lp::Packet pkt11;
+  BOOST_REQUIRE_NO_THROW(pkt11.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt11.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 1);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 5);
+
+  // advance clocks past m_nextMarkTime
+  this->advanceClocks(time::milliseconds(51));
+
+  // markable packet, queue length still above threshold
+  transport->setSendQueueLength(33000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 12);
+  lp::Packet pkt12;
+  BOOST_REQUIRE_NO_THROW(pkt12.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt12.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt12.get<lp::CongestionMarkField>(), 1);
+  markingInterval = time::nanoseconds(
+    static_cast<time::nanoseconds::rep>(options.baseCongestionMarkingInterval.count() /
+                                        std::sqrt(service->m_nMarkedSinceInMarkingState)));
+  nextMarkTime += markingInterval;
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 2);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 6);
+
+  // no more congestion
+  transport->setSendQueueLength(10000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 13);
+  lp::Packet pkt13;
+  BOOST_REQUIRE_NO_THROW(pkt13.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt13.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 6);
+
+  // advance clocks past one full interval since last mark
+  this->advanceClocks(time::milliseconds(101));
+
+  // start congestion again
+  transport->setSendQueueLength(50000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 14);
+  lp::Packet pkt14;
+  BOOST_REQUIRE_NO_THROW(pkt14.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt14.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt14.get<lp::CongestionMarkField>(), 1);
+  nextMarkTime = time::steady_clock::now() + time::milliseconds(100);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  lastMarkTime = time::steady_clock::now();
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 1);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 7);
+
+  // no more congestion, cancel marking interval
+  transport->setSendQueueLength(5000);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 15);
+  lp::Packet pkt15;
+  BOOST_REQUIRE_NO_THROW(pkt15.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt15.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_lastMarkTime, lastMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 7);
+}
+
+BOOST_AUTO_TEST_CASE(DefaultThreshold)
+{
+  GenericLinkService::Options options;
+  options.allowCongestionMarking = true;
+  options.baseCongestionMarkingInterval = time::milliseconds(100);
+  initialize(options, MTU_UNLIMITED, QUEUE_UNSUPPORTED);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+
+  // congestion threshold will be 65536 bytes, since the transport reports that it cannot measure
+  // the queue capacity
+
+  // no congestion
+  transport->setSendQueueLength(0);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet pkt1;
+  BOOST_REQUIRE_NO_THROW(pkt1.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt1.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+
+  // no congestion
+  transport->setSendQueueLength(65536);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 2);
+  lp::Packet pkt2;
+  BOOST_REQUIRE_NO_THROW(pkt2.wireDecode(transport->sentPackets.back().packet));
+  BOOST_CHECK_EQUAL(pkt2.count<lp::CongestionMarkField>(), 0);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, time::steady_clock::TimePoint::max());
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 0);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 0);
+
+  // first congested (and marked) packet
+  transport->setSendQueueLength(65537);
+  face->sendInterest(*interest);
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 3);
+  lp::Packet pkt3;
+  BOOST_REQUIRE_NO_THROW(pkt3.wireDecode(transport->sentPackets.back().packet));
+  BOOST_REQUIRE_EQUAL(pkt3.count<lp::CongestionMarkField>(), 1);
+  BOOST_CHECK_EQUAL(pkt3.get<lp::CongestionMarkField>(), 1);
+  time::steady_clock::TimePoint nextMarkTime = time::steady_clock::now() + time::milliseconds(100);
+  BOOST_CHECK_EQUAL(service->m_nextMarkTime, nextMarkTime);
+  BOOST_CHECK_EQUAL(service->m_nMarkedSinceInMarkingState, 1);
+  BOOST_CHECK_EQUAL(service->getCounters().nCongestionMarked, 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END() // CongestionMark
 
 BOOST_AUTO_TEST_SUITE(LpFields)
 
@@ -469,12 +901,13 @@ BOOST_AUTO_TEST_CASE(ReceiveNextHopFaceIdDropNack)
   BOOST_CHECK(receivedNacks.empty());
 }
 
-BOOST_AUTO_TEST_CASE(ReceiveCacheControl)
+BOOST_AUTO_TEST_CASE(ReceiveCachePolicy)
 {
-  // Initialize with Options that enables local fields
+  // Initialize with Options that disables local fields
   GenericLinkService::Options options;
-  options.allowLocalFields = true;
+  options.allowLocalFields = false;
   initialize(options);
+  // CachePolicy is unprivileged and does not require allowLocalFields option.
 
   shared_ptr<Data> data = makeData("/12345678");
   lp::Packet packet(data->wireEncode());
@@ -488,27 +921,7 @@ BOOST_AUTO_TEST_CASE(ReceiveCacheControl)
   BOOST_CHECK_EQUAL(tag->get().getPolicy(), lp::CachePolicyType::NO_CACHE);
 }
 
-BOOST_AUTO_TEST_CASE(ReceiveCacheControlDisabled)
-{
-  // Initialize with Options that disables local fields
-  GenericLinkService::Options options;
-  options.allowLocalFields = false;
-  initialize(options);
-
-  shared_ptr<Data> data = makeData("/12345678");
-  lp::Packet packet(data->wireEncode());
-  lp::CachePolicy policy;
-  policy.setPolicy(lp::CachePolicyType::NO_CACHE);
-  packet.set<lp::CachePolicyField>(policy);
-
-  transport->receivePacket(packet.wireEncode());
-
-  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 0); // not an error
-  BOOST_REQUIRE_EQUAL(receivedData.size(), 1);
-  BOOST_CHECK(receivedData.back().getTag<lp::CachePolicyTag>() == nullptr);
-}
-
-BOOST_AUTO_TEST_CASE(ReceiveCacheControlDropInterest)
+BOOST_AUTO_TEST_CASE(ReceiveCachePolicyDropInterest)
 {
   // Initialize with Options that enables local fields
   GenericLinkService::Options options;
@@ -527,7 +940,7 @@ BOOST_AUTO_TEST_CASE(ReceiveCacheControlDropInterest)
   BOOST_CHECK(receivedInterests.empty());
 }
 
-BOOST_AUTO_TEST_CASE(ReceiveCacheControlDropNack)
+BOOST_AUTO_TEST_CASE(ReceiveCachePolicyDropNack)
 {
   // Initialize with Options that enables local fields
   GenericLinkService::Options options;
@@ -721,8 +1134,219 @@ BOOST_AUTO_TEST_CASE(ReceiveCongestionMarkNack)
   BOOST_CHECK_EQUAL(*tag, 1);
 }
 
-BOOST_AUTO_TEST_SUITE_END() // LpFields
+BOOST_AUTO_TEST_CASE(SendNonDiscovery)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
 
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+  interest->setTag(make_shared<lp::NonDiscoveryTag>(lp::EmptyValue{}));
+
+  face->sendInterest(*interest);
+
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet sent(transport->sentPackets.back().packet);
+  BOOST_CHECK(sent.has<lp::NonDiscoveryField>());
+}
+
+BOOST_AUTO_TEST_CASE(SendNonDiscoveryDisabled)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = false;
+  initialize(options);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+  interest->setTag(make_shared<lp::NonDiscoveryTag>(lp::EmptyValue{}));
+
+  face->sendInterest(*interest);
+
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet sent(transport->sentPackets.back().packet);
+  BOOST_CHECK(!sent.has<lp::NonDiscoveryField>());
+}
+
+BOOST_AUTO_TEST_CASE(ReceiveNonDiscovery)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+  lp::Packet packet(interest->wireEncode());
+  packet.set<lp::NonDiscoveryField>(lp::EmptyValue{});
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_REQUIRE_EQUAL(receivedInterests.size(), 1);
+  shared_ptr<lp::NonDiscoveryTag> tag = receivedInterests.back().getTag<lp::NonDiscoveryTag>();
+  BOOST_CHECK(tag != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ReceiveNonDiscoveryDisabled)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = false;
+  initialize(options);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+  lp::Packet packet(interest->wireEncode());
+  packet.set<lp::NonDiscoveryField>(lp::EmptyValue{});
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 0); // not an error
+  BOOST_CHECK_EQUAL(receivedInterests.size(), 1);
+
+  shared_ptr<lp::NonDiscoveryTag> tag = receivedInterests.back().getTag<lp::NonDiscoveryTag>();
+  BOOST_CHECK(tag == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ReceiveNonDiscoveryDropData)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  shared_ptr<Data> data = makeData("/12345678");
+  lp::Packet packet(data->wireEncode());
+  packet.set<lp::NonDiscoveryField>(lp::EmptyValue{});
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 1);
+  BOOST_CHECK(receivedData.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ReceiveNonDiscoveryDropNack)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  lp::Nack nack = makeNack("/localhost/test", 123, lp::NackReason::NO_ROUTE);
+  lp::Packet packet;
+  packet.set<lp::FragmentField>(std::make_pair(
+    nack.getInterest().wireEncode().begin(), nack.getInterest().wireEncode().end()));
+  packet.set<lp::NackField>(nack.getHeader());
+  packet.set<lp::NonDiscoveryField>(lp::EmptyValue{});
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 1);
+  BOOST_CHECK(receivedNacks.empty());
+}
+
+BOOST_AUTO_TEST_CASE(SendPrefixAnnouncement)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  shared_ptr<Data> data = makeData("/12345678");
+  lp::PrefixAnnouncement pa = makePrefixAnnouncement("/local/ndn/prefix");
+  data->setTag(make_shared<lp::PrefixAnnouncementTag>(pa));
+
+  face->sendData(*data);
+
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet sent(transport->sentPackets.back().packet);
+  BOOST_CHECK(sent.has<lp::PrefixAnnouncementField>());
+}
+
+BOOST_AUTO_TEST_CASE(SendPrefixAnnouncementDisabled)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = false;
+  initialize(options);
+
+  shared_ptr<Data> data = makeData("/12345678");
+  lp::PrefixAnnouncement pa = makePrefixAnnouncement("/local/ndn/prefix");
+  data->setTag(make_shared<lp::PrefixAnnouncementTag>(pa));
+
+  face->sendData(*data);
+
+  BOOST_REQUIRE_EQUAL(transport->sentPackets.size(), 1);
+  lp::Packet sent(transport->sentPackets.back().packet);
+  BOOST_CHECK(!sent.has<lp::PrefixAnnouncementField>());
+}
+
+BOOST_AUTO_TEST_CASE(ReceivePrefixAnnouncement)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  shared_ptr<Data> data = makeData("/12345678");
+  lp::PrefixAnnouncement pa = makePrefixAnnouncement("/local/ndn/prefix");
+  lp::Packet packet(data->wireEncode());
+  packet.set<lp::PrefixAnnouncementField>(pa);
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_REQUIRE_EQUAL(receivedData.size(), 1);
+  shared_ptr<lp::PrefixAnnouncementTag> tag = receivedData.back().getTag<lp::PrefixAnnouncementTag>();
+  BOOST_REQUIRE_EQUAL(tag->get().getAnnouncedName(), "/local/ndn/prefix");
+}
+
+BOOST_AUTO_TEST_CASE(ReceivePrefixAnnouncementDisabled)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = false;
+  initialize(options);
+
+  shared_ptr<Data> data = makeData("/12345678");
+  lp::PrefixAnnouncement pa = makePrefixAnnouncement("/local/ndn/prefix");
+  lp::Packet packet(data->wireEncode());
+  packet.set<lp::PrefixAnnouncementField>(pa);
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 0); // not an error
+  BOOST_CHECK_EQUAL(receivedData.size(), 1);
+
+  shared_ptr<lp::NonDiscoveryTag> tag = receivedData.back().getTag<lp::NonDiscoveryTag>();
+  BOOST_CHECK(tag == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ReceivePrefixAnnouncementDropInterest)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  shared_ptr<Interest> interest = makeInterest("/12345678");
+  lp::PrefixAnnouncement pa = makePrefixAnnouncement("/local/ndn/prefix");
+  lp::Packet packet(interest->wireEncode());
+  packet.set<lp::PrefixAnnouncementField>(pa);
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 1);
+  BOOST_CHECK(receivedInterests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ReceivePrefixAnnouncementDropNack)
+{
+  GenericLinkService::Options options;
+  options.allowSelfLearning = true;
+  initialize(options);
+
+  lp::Nack nack = makeNack("/localhost/test", 123, lp::NackReason::NO_ROUTE);
+  lp::PrefixAnnouncement pa = makePrefixAnnouncement("/local/ndn/prefix");
+  lp::Packet packet;
+  packet.set<lp::FragmentField>(std::make_pair(
+    nack.getInterest().wireEncode().begin(), nack.getInterest().wireEncode().end()));
+  packet.set<lp::NackField>(nack.getHeader());
+  packet.set<lp::PrefixAnnouncementField>(pa);
+
+  transport->receivePacket(packet.wireEncode());
+
+  BOOST_CHECK_EQUAL(service->getCounters().nInNetInvalid, 1);
+  BOOST_CHECK(receivedNacks.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END() // LpFields
 
 BOOST_AUTO_TEST_SUITE(Malformed) // receive malformed packets
 

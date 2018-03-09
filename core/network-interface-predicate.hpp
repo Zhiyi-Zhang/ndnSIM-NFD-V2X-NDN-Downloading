@@ -1,12 +1,12 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016, Regents of the University of California,
- *                          Arizona Board of Regents,
- *                          Colorado State University,
- *                          University Pierre & Marie Curie, Sorbonne University,
- *                          Washington University in St. Louis,
- *                          Beijing Institute of Technology,
- *                          The University of Memphis
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
+ *                           Arizona Board of Regents,
+ *                           Colorado State University,
+ *                           University Pierre & Marie Curie, Sorbonne University,
+ *                           Washington University in St. Louis,
+ *                           Beijing Institute of Technology,
+ *                           The University of Memphis.
  *
  * This file is part of NFD (Named Data Networking Forwarding Daemon).
  * See AUTHORS.md for complete list of NFD authors and contributors.
@@ -27,10 +27,9 @@
 #define NFD_CORE_NETWORK_INTERFACE_PREDICATE_HPP
 
 #include "common.hpp"
+#include <ndn-cxx/net/network-interface.hpp>
 
 namespace nfd {
-
-class NetworkInterfaceInfo;
 
 /**
  * \brief Represents a predicate to accept or reject a NetworkInterfaceInfo.
@@ -41,7 +40,6 @@ class NetworkInterfaceInfo;
  * all interfaces. A NetworkInterfaceInfo is accepted if it matches any entry in the whitelist and none
  * of the entries in the blacklist.
  */
-
 class NetworkInterfacePredicate
 {
 public:
@@ -60,7 +58,16 @@ public:
   parseBlacklist(const boost::property_tree::ptree& list);
 
   bool
-  operator()(const NetworkInterfaceInfo& nic) const;
+  operator()(const ndn::net::NetworkInterface& netif) const;
+
+  bool
+  operator==(const NetworkInterfacePredicate& other) const;
+
+  bool
+  operator!=(const NetworkInterfacePredicate& other) const
+  {
+    return !this->operator==(other);
+  }
 
 private:
   std::set<std::string> m_whitelist;

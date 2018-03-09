@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -30,17 +30,32 @@
 namespace nfd {
 namespace fw {
 
-const Name NccStrategy::STRATEGY_NAME("ndn:/localhost/nfd/strategy/ncc/%FD%01");
 NFD_REGISTER_STRATEGY(NccStrategy);
-
-NccStrategy::NccStrategy(Forwarder& forwarder, const Name& name)
-  : Strategy(forwarder, name)
-{
-}
 
 const time::microseconds NccStrategy::DEFER_FIRST_WITHOUT_BEST_FACE = time::microseconds(4000);
 const time::microseconds NccStrategy::DEFER_RANGE_WITHOUT_BEST_FACE = time::microseconds(75000);
 const time::nanoseconds NccStrategy::MEASUREMENTS_LIFETIME = time::seconds(16);
+
+NccStrategy::NccStrategy(Forwarder& forwarder, const Name& name)
+  : Strategy(forwarder)
+{
+  ParsedInstanceName parsed = parseInstanceName(name);
+  if (!parsed.parameters.empty()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument("NccStrategy does not accept parameters"));
+  }
+  if (parsed.version && *parsed.version != getStrategyName()[-1].toVersion()) {
+    BOOST_THROW_EXCEPTION(std::invalid_argument(
+      "NccStrategy does not support version " + to_string(*parsed.version)));
+  }
+  this->setInstanceName(makeInstanceName(name, getStrategyName()));
+}
+
+const Name&
+NccStrategy::getStrategyName()
+{
+  static Name strategyName("/localhost/nfd/strategy/ncc/%FD%01");
+  return strategyName;
+}
 
 void
 NccStrategy::afterReceiveInterest(const Face& inFace, const Interest& interest,

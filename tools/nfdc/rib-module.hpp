@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,6 +27,7 @@
 #define NFD_TOOLS_NFDC_RIB_MODULE_HPP
 
 #include "module.hpp"
+#include "command-parser.hpp"
 
 namespace nfd {
 namespace tools {
@@ -41,14 +42,48 @@ using ndn::nfd::Route;
 class RibModule : public Module, noncopyable
 {
 public:
-  virtual void
+  /** \brief register 'route list', 'route show', 'route add', 'route remove' commands
+   */
+  static void
+  registerCommands(CommandParser& parser);
+
+  /** \brief the 'route list' command
+   */
+  static void
+  list(ExecuteContext& ctx);
+
+  /** \brief the 'route show' command
+   */
+  static void
+  show(ExecuteContext& ctx);
+
+  /** \brief the 'route add' command
+   */
+  static void
+  add(ExecuteContext& ctx);
+
+  /** \brief the 'route remove' command
+   */
+  static void
+  remove(ExecuteContext& ctx);
+
+  void
   fetchStatus(Controller& controller,
               const function<void()>& onSuccess,
               const Controller::DatasetFailCallback& onFailure,
               const CommandOptions& options) override;
 
-  virtual void
+  void
   formatStatusXml(std::ostream& os) const override;
+
+  void
+  formatStatusText(std::ostream& os) const override;
+
+private:
+  using RoutePredicate = function<bool(const RibEntry&, const Route&)>;
+
+  static void
+  listRoutesImpl(ExecuteContext& ctx, const RoutePredicate& filter);
 
   /** \brief format a single status item as XML
    *  \param os output stream
@@ -57,15 +92,22 @@ public:
   void
   formatItemXml(std::ostream& os, const RibEntry& item) const;
 
-  virtual void
-  formatStatusText(std::ostream& os) const override;
-
-  /** \brief format a single status item as text
+  /** \brief format a RibEntry as text
    *  \param os output stream
-   *  \param item status item
+   *  \param entry RIB entry
    */
-  void
-  formatItemText(std::ostream& os, const RibEntry& item) const;
+  static void
+  formatEntryText(std::ostream& os, const RibEntry& entry);
+
+  /** \brief format a Route as text
+   *  \param os output stream
+   *  \param entry RIB entry
+   *  \param route RIB route within \p entry
+   *  \param includePrefix whether to print the name prefix
+   */
+  static void
+  formatRouteText(std::ostream& os, const RibEntry& entry, const Route& route,
+                  bool includePrefix);
 
 private:
   std::vector<RibEntry> m_status;

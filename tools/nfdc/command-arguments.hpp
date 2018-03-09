@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -27,11 +27,19 @@
 #define NFD_TOOLS_NFDC_COMMAND_ARGUMENTS_HPP
 
 #include "core/common.hpp"
+#include "status-report.hpp"
+
+#include <ndn-cxx/encoding/nfd-constants.hpp>
+
 #include <boost/any.hpp>
+#include <boost/logic/tribool.hpp>
 
 namespace nfd {
 namespace tools {
 namespace nfdc {
+
+using ndn::nfd::FacePersistency;
+using ndn::nfd::RouteOrigin;
 
 /** \brief contains named command arguments
  */
@@ -46,6 +54,32 @@ public:
   {
     auto i = find(key);
     return i == end() ? defaultValue : boost::any_cast<T>(i->second);
+  }
+
+  /** \return the argument value, or nullopt if the argument is omitted on command line
+   */
+  template<typename T>
+  ndn::optional<T>
+  getOptional(const std::string& key) const
+  {
+    auto i = find(key);
+    if (i == end()) {
+      return ndn::nullopt;
+    }
+    return boost::any_cast<T>(i->second);
+  }
+
+  /** \brief get an optional boolean argument as tribool
+   *  \return the argument value, or boost::logic::indeterminate if the argument is omitted on command line
+   */
+  boost::logic::tribool
+  getTribool(const std::string& key) const
+  {
+    auto value = getOptional<bool>(key);
+    if (value) {
+      return *value;
+    }
+    return boost::logic::indeterminate;
   }
 };
 

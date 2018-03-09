@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -80,10 +80,16 @@ UnicastUdpTransport::UnicastUdpTransport(protocol::socket&& socket,
   }
 }
 
-void
-UnicastUdpTransport::beforeChangePersistency(ndn::nfd::FacePersistency newPersistency)
+bool
+UnicastUdpTransport::canChangePersistencyToImpl(ndn::nfd::FacePersistency newPersistency) const
 {
-  if (newPersistency == ndn::nfd::FACE_PERSISTENCY_ON_DEMAND &&
+  return true;
+}
+
+void
+UnicastUdpTransport::afterChangePersistency(ndn::nfd::FacePersistency oldPersistency)
+{
+  if (getPersistency() == ndn::nfd::FACE_PERSISTENCY_ON_DEMAND &&
       m_idleTimeout > time::nanoseconds::zero()) {
     scheduleClosureWhenIdle();
   }
@@ -97,12 +103,12 @@ void
 UnicastUdpTransport::scheduleClosureWhenIdle()
 {
   m_closeIfIdleEvent = scheduler::schedule(m_idleTimeout, [this] {
-    if (!hasBeenUsedRecently()) {
+    if (!hasRecentlyReceived()) {
       NFD_LOG_FACE_INFO("Closing due to inactivity");
       this->close();
     }
     else {
-      resetRecentUsage();
+      resetRecentlyReceived();
       scheduleClosureWhenIdle();
     }
   });

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -25,8 +25,11 @@
 
 #include "fib-manager.hpp"
 #include "fw/face-table.hpp"
+
 #include <ndn-cxx/lp/tags.hpp>
 #include <ndn-cxx/mgmt/nfd/fib-entry.hpp>
+
+#include <boost/range/adaptor/transformed.hpp>
 
 namespace nfd {
 
@@ -54,31 +57,29 @@ FibManager::addNextHop(const Name& topPrefix, const Interest& interest,
                        const ndn::mgmt::CommandContinuation& done)
 {
   setFaceForSelfRegistration(interest, parameters);
-
   const Name& prefix = parameters.getName();
   FaceId faceId = parameters.getFaceId();
   uint64_t cost = parameters.getCost();
 
-  NFD_LOG_TRACE("add-nexthop prefix: " << prefix
-                << " faceid: " << faceId
-                << " cost: " << cost);
+  if (prefix.size() > Fib::getMaxDepth()) {
+    NFD_LOG_DEBUG("fib/add-nexthop(" << prefix << ',' << faceId << ',' << cost <<
+                  "): FAIL prefix-too-long");
+    return done(ControlResponse(414, "FIB entry prefix cannot exceed " +
+                                ndn::to_string(Fib::getMaxDepth()) + " components"));
+  }
 
   Face* face = m_faceTable.get(faceId);
-  if (face != nullptr) {
-    fib::Entry* entry = m_fib.insert(prefix).first;
-    entry->addNextHop(*face, cost);
-
-    NFD_LOG_DEBUG("add-nexthop result: OK"
-                  << " prefix:" << prefix
-                  << " faceid: " << faceId
-                  << " cost: " << cost);
-
-    return done(ControlResponse(200, "Success").setBody(parameters.wireEncode()));
-  }
-  else {
-    NFD_LOG_INFO("add-nexthop result: FAIL reason: unknown-faceid: " << faceId);
+  if (face == nullptr) {
+    NFD_LOG_DEBUG("fib/add-nexthop(" << prefix << ',' << faceId << ',' << cost <<
+                  "): FAIL unknown-faceid");
     return done(ControlResponse(410, "Face not found"));
   }
+
+  fib::Entry* entry = m_fib.insert(prefix).first;
+  entry->addNextHop(*face, cost);
+
+  NFD_LOG_TRACE("fib/add-nexthop(" << prefix << ',' << faceId << ',' << cost << "): OK");
+  return done(ControlResponse(200, "Success").setBody(parameters.wireEncode()));
 }
 
 void
@@ -87,54 +88,49 @@ FibManager::removeNextHop(const Name& topPrefix, const Interest& interest,
                           const ndn::mgmt::CommandContinuation& done)
 {
   setFaceForSelfRegistration(interest, parameters);
-
-  NFD_LOG_TRACE("remove-nexthop prefix: " << parameters.getName()
-                << " faceid: " << parameters.getFaceId());
-
-  Face* face = m_faceTable.get(parameters.getFaceId());
-  if (face != nullptr) {
-    fib::Entry* entry = m_fib.findExactMatch(parameters.getName());
-    if (entry != nullptr) {
-      entry->removeNextHop(*face);
-      NFD_LOG_DEBUG("remove-nexthop result: OK prefix: " << parameters.getName()
-                    << " faceid: " << parameters.getFaceId());
-
-      if (!entry->hasNextHops()) {
-        m_fib.erase(*entry);
-      }
-    }
-    else {
-      NFD_LOG_DEBUG("remove-nexthop result: OK");
-    }
-  }
-  else {
-    NFD_LOG_DEBUG("remove-nexthop result: OK");
-  }
+  const Name& prefix = parameters.getName();
+  FaceId faceId = parameters.getFaceId();
 
   done(ControlResponse(200, "Success").setBody(parameters.wireEncode()));
+
+  Face* face = m_faceTable.get(faceId);
+  if (face == nullptr) {
+    NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK no-face");
+    return;
+  }
+
+  fib::Entry* entry = m_fib.findExactMatch(parameters.getName());
+  if (entry == nullptr) {
+    NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK no-entry");
+    return;
+  }
+
+  entry->removeNextHop(*face);
+  if (!entry->hasNextHops()) {
+    m_fib.erase(*entry);
+    NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK entry-erased");
+  }
+  else {
+    NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK nexthop-removed");
+  }
 }
 
 void
 FibManager::listEntries(const Name& topPrefix, const Interest& interest,
                         ndn::mgmt::StatusDatasetContext& context)
 {
-  for (auto&& entry : m_fib) {
-    auto prefix = entry.getPrefix();
-    ndn::nfd::FibEntry record;
-    const auto& nextHops = entry.getNextHops();
-
-    for (auto&& next : nextHops) {
-      ndn::nfd::NextHopRecord nextHopRecord;
-      nextHopRecord.setFaceId(next.getFace().getId());
-      nextHopRecord.setCost(next.getCost());
-
-      record.addNextHopRecord(nextHopRecord);
-    }
-
-    record.setPrefix(prefix);
-    context.append(record.wireEncode());
+  for (const auto& entry : m_fib) {
+    const auto& nexthops = entry.getNextHops() |
+                           boost::adaptors::transformed([] (const fib::NextHop& nh) {
+                             return ndn::nfd::NextHopRecord()
+                                 .setFaceId(nh.getFace().getId())
+                                 .setCost(nh.getCost());
+                           });
+    context.append(ndn::nfd::FibEntry()
+                   .setPrefix(entry.getPrefix())
+                   .setNextHopRecords(std::begin(nexthops), std::end(nexthops))
+                   .wireEncode());
   }
-
   context.end();
 }
 

@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2018,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -32,6 +32,9 @@
 #include <boost/range/adaptor/transformed.hpp>
 
 namespace nfd {
+
+class Forwarder;
+
 namespace strategy_choice {
 
 /** \brief represents the Strategy Choice table
@@ -48,7 +51,8 @@ namespace strategy_choice {
 class StrategyChoice : noncopyable
 {
 public:
-  StrategyChoice(NameTree& nameTree, unique_ptr<fw::Strategy> defaultStrategy);
+  explicit
+  StrategyChoice(Forwarder& forwarder);
 
   size_t
   size() const
@@ -56,35 +60,63 @@ public:
     return m_nItems;
   }
 
-public: // available Strategy types
-  /** \brief determines if a strategy is installed
-   *  \param strategyName name of the strategy
-   *  \param isExact true to require exact match, false to permit unversioned strategyName
-   *  \return true if strategy is installed
+  /** \brief set the default strategy
+   *
+   *  This must be called by forwarder constructor.
    */
-  bool
-  hasStrategy(const Name& strategyName, bool isExact = false) const;
-
-  /** \brief install a strategy
-   *  \return if installed, true, and a pointer to the strategy instance;
-   *          if not installed due to duplicate strategyName, false,
-   *          and a pointer to the existing strategy instance
-   */
-  std::pair<bool, fw::Strategy*>
-  install(unique_ptr<fw::Strategy> strategy);
+  void
+  setDefaultStrategy(const Name& strategyName);
 
 public: // Strategy Choice table
-  /** \brief set strategy of prefix to be strategyName
-   *  \param prefix the name prefix for which \p strategyName should be used
-   *  \param strategyName the strategy to be used
-   *  \return true on success
-   *
-   *  This method set a strategy onto a Name prefix.
-   *  The strategy must have been installed.
-   *  The strategyName can either be exact (contains version component),
-   *  or omit the version component to pick the latest version.
+  class InsertResult
+  {
+  public:
+    explicit
+    operator bool() const
+    {
+      return m_status == OK;
+    }
+
+    bool
+    isRegistered() const
+    {
+      return m_status == OK || m_status == EXCEPTION;
+    }
+
+    /** \brief get a status code for use in management command response
+     */
+    int
+    getStatusCode() const
+    {
+      return static_cast<int>(m_status);
+    }
+
+  private:
+    enum Status {
+      OK             = 200,
+      NOT_REGISTERED = 404,
+      EXCEPTION      = 409,
+      DEPTH_EXCEEDED = 414,
+    };
+
+    // implicitly constructible from Status
+    InsertResult(Status status, const std::string& exceptionMessage = "");
+
+  private:
+    Status m_status;
+    std::string m_exceptionMessage;
+
+    friend class StrategyChoice;
+    friend std::ostream& operator<<(std::ostream&, const InsertResult&);
+  };
+
+  /** \brief set strategy of \p prefix to be \p strategyName
+   *  \param prefix the name prefix to change strategy
+   *  \param strategyName strategy instance name, may contain version and parameters;
+   *                      strategy must have been registered
+   *  \return convertible to true on success; convertible to false on failure
    */
-  bool
+  InsertResult
   insert(const Name& prefix, const Name& strategyName);
 
   /** \brief make prefix to inherit strategy from its parent
@@ -145,15 +177,6 @@ public: // enumeration
   }
 
 private:
-  /** \brief get Strategy instance by strategyName
-   *  \param strategyName a versioned or unversioned strategyName
-   */
-  fw::Strategy*
-  getStrategy(const Name& strategyName) const;
-
-  void
-  setDefaultStrategy(unique_ptr<fw::Strategy> strategy);
-
   void
   changeStrategy(Entry& entry,
                  fw::Strategy& oldStrategy,
@@ -169,12 +192,13 @@ private:
   getRange() const;
 
 private:
+  Forwarder& m_forwarder;
   NameTree& m_nameTree;
   size_t m_nItems;
-
-  typedef std::map<Name, unique_ptr<fw::Strategy>> StrategyInstanceTable;
-  StrategyInstanceTable m_strategyInstances;
 };
+
+std::ostream&
+operator<<(std::ostream& os, const StrategyChoice::InsertResult& res);
 
 } // namespace strategy_choice
 

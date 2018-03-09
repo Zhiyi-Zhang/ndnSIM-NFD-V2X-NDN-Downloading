@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * Copyright (c) 2014-2015,  Regents of the University of California,
+ * Copyright (c) 2014-2017,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -35,6 +35,8 @@ namespace websocket {
 typedef boost::asio::ip::tcp::endpoint Endpoint;
 } // namespace websocket
 
+namespace face {
+
 /**
  * \brief Class implementing WebSocket-based channel to create faces
  */
@@ -51,6 +53,18 @@ public:
   explicit
   WebSocketChannel(const websocket::Endpoint& localEndpoint);
 
+  bool
+  isListening() const override
+  {
+    return m_server.is_listening();
+  }
+
+  size_t
+  size() const override
+  {
+    return m_channelFaces.size();
+  }
+
   /**
    * \brief Enable listening on the local endpoint, accept connections,
    *        and create faces when remote host makes a connection
@@ -59,15 +73,6 @@ public:
    */
   void
   listen(const FaceCreatedCallback& onFaceCreated);
-
-  /**
-   * \brief Get number of faces in the channel
-   */
-  size_t
-  size() const;
-
-  bool
-  isListening() const;
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   /** \pre listen hasn't been invoked
@@ -98,22 +103,15 @@ private:
   handleClose(websocketpp::connection_hdl hdl);
 
 private:
-  websocket::Endpoint m_localEndpoint;
+  const websocket::Endpoint m_localEndpoint;
   websocket::Server m_server;
-
   std::map<websocketpp::connection_hdl, shared_ptr<Face>,
            std::owner_less<websocketpp::connection_hdl>> m_channelFaces;
-
   FaceCreatedCallback m_onFaceCreatedCallback;
   time::milliseconds m_pingInterval;
 };
 
-inline bool
-WebSocketChannel::isListening() const
-{
-  return m_server.is_listening();
-}
-
+} // namespace face
 } // namespace nfd
 
 #endif // NFD_DAEMON_FACE_WEBSOCKET_CHANNEL_HPP
